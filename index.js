@@ -69,6 +69,7 @@ const PREFIX = '!';
 const TICKET_LOG_CHANNEL_ID = '1502598979987308705';
 const MODERATOR_ROLE_ID = '1483100413552230450';
 const HEAD_MODERATOR_ROLE_ID = '1502659939498332160';
+const TICKET_MANAGER_ROLE_ID = '1549768702642356264';
 
 // Store ticket creators in memory for log tracking
 const ticketCreators = new Map();
@@ -114,6 +115,10 @@ client.on('interactionCreate', async (interaction) => {
                         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
                     },
                     {
+                        id: TICKET_MANAGER_ROLE_ID, // Ticket Manager Role
+                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
+                    },
+                    {
                         id: client.user.id, // Bot itself
                         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
                     }
@@ -122,6 +127,22 @@ client.on('interactionCreate', async (interaction) => {
 
             // Save creator info for logging
             ticketCreators.set(ticketChannel.id, interaction.user.id);
+
+            // INSTANT LOG: Send creation log to ticket-log channel
+            const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
+            if (logChannel) {
+                const createLogEmbed = new EmbedBuilder()
+                    .setTitle('🎟️ Ticket Created')
+                    .setColor('#2ECC71')
+                    .addFields(
+                        { name: '📁 Ticket Channel', value: `${ticketChannel}`, inline: true },
+                        { name: '👤 Opened By', value: `<@${interaction.user.id}>`, inline: true },
+                        { name: '⏰ Created At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                    )
+                    .setTimestamp();
+
+                await logChannel.send({ embeds: [createLogEmbed] }).catch(err => console.log('Could not send creation log:', err));
+            }
 
             const welcomeTicketEmbed = new EmbedBuilder()
                 .setTitle(`🎟️ Ticket Support`)
@@ -136,8 +157,8 @@ client.on('interactionCreate', async (interaction) => {
                     .setStyle(ButtonStyle.Danger)
             );
 
-            // Ping Creator + Moderator + Head Moderator
-            const pingMessage = `<@${interaction.user.id}> <@&${MODERATOR_ROLE_ID}> <@&${HEAD_MODERATOR_ROLE_ID}>`;
+            // Ping Creator + Moderator + Head Moderator + Ticket Manager
+            const pingMessage = `<@${interaction.user.id}> <@&${MODERATOR_ROLE_ID}> <@&${HEAD_MODERATOR_ROLE_ID}> <@&${TICKET_MANAGER_ROLE_ID}>`;
 
             await ticketChannel.send({ content: pingMessage, embeds: [welcomeTicketEmbed], components: [closeButton] });
             return interaction.editReply({ content: `✅ Ticket created! Check out your channel: ${ticketChannel}` });
@@ -155,21 +176,21 @@ client.on('interactionCreate', async (interaction) => {
         const channel = interaction.channel;
         const creatorId = ticketCreators.get(channel.id) || 'Unknown User';
 
-        // Send Log to ticket-log channel
+        // INSTANT LOG: Send deletion log to ticket-log channel
         const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
         if (logChannel) {
-            const logEmbed = new EmbedBuilder()
-                .setTitle('📜 Ticket Closed Log')
+            const deleteLogEmbed = new EmbedBuilder()
+                .setTitle('🗑️ Ticket Closed & Deleted')
                 .setColor('#E74C3C')
                 .addFields(
                     { name: '📁 Ticket Name', value: `${channel.name}`, inline: true },
                     { name: '👤 Opened By', value: creatorId !== 'Unknown User' ? `<@${creatorId}>` : 'Unknown', inline: true },
                     { name: '🔒 Closed By', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                    { name: '⏰ Deleted At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
                 )
                 .setTimestamp();
 
-            await logChannel.send({ embeds: [logEmbed] }).catch(err => console.log('Could not send ticket log:', err));
+            await logChannel.send({ embeds: [deleteLogEmbed] }).catch(err => console.log('Could not send deletion log:', err));
         }
 
         ticketCreators.delete(channel.id);
