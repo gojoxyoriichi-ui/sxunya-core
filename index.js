@@ -65,6 +65,14 @@ function getGuildSettings(guildId) {
 
 const PREFIX = '!';
 
+// IDs Configuration
+const TICKET_LOG_CHANNEL_ID = '1502598979987308705';
+const MODERATOR_ROLE_ID = '1483100413552230450';
+const HEAD_MODERATOR_ROLE_ID = '1502659939498332160';
+
+// Store ticket creators in memory for log tracking
+const ticketCreators = new Map();
+
 // ==========================================
 // 🎟️ TICKET BUTTON INTERACTION HANDLER
 // ==========================================
@@ -98,11 +106,22 @@ client.on('interactionCreate', async (interaction) => {
                         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
                     },
                     {
+                        id: MODERATOR_ROLE_ID, // Moderator Role
+                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
+                    },
+                    {
+                        id: HEAD_MODERATOR_ROLE_ID, // Head Moderator Role
+                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
+                    },
+                    {
                         id: client.user.id, // Bot itself
                         allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
                     }
                 ],
             });
+
+            // Save creator info for logging
+            ticketCreators.set(ticketChannel.id, interaction.user.id);
 
             const welcomeTicketEmbed = new EmbedBuilder()
                 .setTitle(`🎟️ Ticket Support`)
@@ -117,7 +136,10 @@ client.on('interactionCreate', async (interaction) => {
                     .setStyle(ButtonStyle.Danger)
             );
 
-            await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [welcomeTicketEmbed], components: [closeButton] });
+            // Ping Creator + Moderator + Head Moderator
+            const pingMessage = `<@${interaction.user.id}> <@&${MODERATOR_ROLE_ID}> <@&${HEAD_MODERATOR_ROLE_ID}>`;
+
+            await ticketChannel.send({ content: pingMessage, embeds: [welcomeTicketEmbed], components: [closeButton] });
             return interaction.editReply({ content: `✅ Ticket created! Check out your channel: ${ticketChannel}` });
 
         } catch (error) {
@@ -129,8 +151,31 @@ client.on('interactionCreate', async (interaction) => {
     // Handle "Close Ticket" Button Click
     if (interaction.customId === 'close_ticket') {
         await interaction.reply('🔒 Closing and deleting this ticket in 5 seconds...');
+
+        const channel = interaction.channel;
+        const creatorId = ticketCreators.get(channel.id) || 'Unknown User';
+
+        // Send Log to ticket-log channel
+        const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
+        if (logChannel) {
+            const logEmbed = new EmbedBuilder()
+                .setTitle('📜 Ticket Closed Log')
+                .setColor('#E74C3C')
+                .addFields(
+                    { name: '📁 Ticket Name', value: `${channel.name}`, inline: true },
+                    { name: '👤 Opened By', value: creatorId !== 'Unknown User' ? `<@${creatorId}>` : 'Unknown', inline: true },
+                    { name: '🔒 Closed By', value: `<@${interaction.user.id}>`, inline: true },
+                    { name: '⏰ Closed At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                )
+                .setTimestamp();
+
+            await logChannel.send({ embeds: [logEmbed] }).catch(err => console.log('Could not send ticket log:', err));
+        }
+
+        ticketCreators.delete(channel.id);
+
         setTimeout(() => {
-            interaction.channel.delete().catch(err => console.log('Could not delete ticket channel:', err));
+            channel.delete().catch(err => console.log('Could not delete ticket channel:', err));
         }, 5000);
     }
 });
@@ -168,11 +213,11 @@ client.on('messageCreate', async (message) => {
     const guildSettings = message.guild ? getGuildSettings(message.guild.id) : null;
 
     // ==========================================
-    // 🎟️ TICKET SETUP COMMAND (ADMIN ONLY)
+    // 🎟️ TICKET SETUP COMMAND (STRICT ADMIN ONLY)
     // ==========================================
     if (command === 'setup-ticket') {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only server administrators can setup the ticket system!');
+            return message.reply('❌ Only server administrators can use `!setup-ticket`!');
         }
 
         const ticketEmbed = new EmbedBuilder()
@@ -561,7 +606,7 @@ client.on('messageCreate', async (message) => {
                 },
                 { 
                     name: '⚙️ Utilities & Admin Commands', 
-                    value: '`!serverinfo` - Display server information\n`!setup-ticket` - Create a ticket panel (Admin)\n`!poll <question>` - Create a poll (Admin)\n`!enableautoroles` - Enable member auto-role (Admin)\n`!disableautoroles` - Disable member auto-role (Admin)\n`!clandelete <name>` - Delete any clan (Admin Override)' 
+                    value: '`!serverinfo` - Display server information\n`!setup-ticket` - Create a ticket panel (Admin Only)\n`!poll <question>` - Create a poll (Admin)\n`!enableautoroles` - Enable member auto-role (Admin)\n`!disableautoroles` - Disable member auto-role (Admin)\n`!clandelete <name>` - Delete any clan (Admin Override)' 
                 }
             )
             .setFooter({ text: 'Use ! prefix before every command.' });
