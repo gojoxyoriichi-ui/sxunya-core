@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 require('dotenv').config();
@@ -8,25 +8,75 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
     ]
 });
 
 // Express Server for 24/7 Uptime
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get('/', (req, res) => res.send('Bot is live and running!'));
+app.get('/', (req, res) => res.send('Sxunya Core Bot is online and operational!'));
 app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
 
-// Load Clans
+// Load Data
 let clans = {};
+let economy = {}; 
+let settings = {}; 
+
 if (fs.existsSync('clans.json')) {
     clans = JSON.parse(fs.readFileSync('clans.json', 'utf8'));
 }
-function saveClans() {
+if (fs.existsSync('economy.json')) {
+    economy = JSON.parse(fs.readFileSync('economy.json', 'utf8'));
+}
+if (fs.existsSync('settings.json')) {
+    settings = JSON.parse(fs.readFileSync('settings.json', 'utf8'));
+}
+
+function saveData() {
     fs.writeFileSync('clans.json', JSON.stringify(clans, null, 2));
+    fs.writeFileSync('economy.json', JSON.stringify(economy, null, 2));
+    fs.writeFileSync('settings.json', JSON.stringify(settings, null, 2));
+}
+
+function getUserData(userId) {
+    if (!economy[userId]) {
+        economy[userId] = { balance: 100, lastDaily: 0 };
+    }
+    return economy[userId];
+}
+
+function getGuildSettings(guildId) {
+    if (!settings[guildId]) {
+        settings[guildId] = { autoRoleEnabled: false };
+    }
+    return settings[guildId];
 }
 
 const PREFIX = '!';
+
+// --- EVENT: AUTO-WELCOME & TOGGLABLE AUTO-ROLE ---
+client.on('guildMemberAdd', async (member) => {
+    const guildSettings = getGuildSettings(member.guild.id);
+
+    if (guildSettings.autoRoleEnabled) {
+        const role = member.guild.roles.cache.find(r => r.name === 'Member');
+        if (role) {
+            await member.roles.add(role).catch(err => console.log('Could not add auto-role:', err));
+        }
+    }
+
+    const channel = member.guild.systemChannel || member.guild.channels.cache.find(ch => ch.name.includes('welcome') || ch.name.includes('general'));
+    if (channel) {
+        const welcomeEmbed = new EmbedBuilder()
+            .setTitle(`🎉 Welcome to ${member.guild.name}!`)
+            .setDescription(`Welcome <@${member.id}>! We're glad to have you here. Use \`!help\` to check out all bot commands!`)
+            .setColor('#5865F2')
+            .setThumbnail(member.user.displayAvatarURL());
+        
+        channel.send({ embeds: [welcomeEmbed] });
+    }
+});
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith(PREFIX)) return;
@@ -34,7 +84,58 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // --- FUN & GENERAL COMMANDS ---
+    const userEco = getUserData(message.author.id);
+    const guildSettings = message.guild ? getGuildSettings(message.guild.id) : null;
+
+    // ==========================================
+    // ⚙️ TOGGLABLE AUTO-ROLE COMMANDS (ADMIN)
+    // ==========================================
+    if (command === 'enableautoroles') {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return message.reply('❌ Only server administrators can use this command!');
+        }
+
+        guildSettings.autoRoleEnabled = true;
+        saveData();
+        return message.reply('✅ Auto-roles have been **enabled**! New members will automatically receive the "Member" role.');
+    }
+
+    if (command === 'disableautoroles') {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return message.reply('❌ Only server administrators can use this command!');
+        }
+
+        guildSettings.autoRoleEnabled = false;
+        saveData();
+        return message.reply('🛑 Auto-roles have been **disabled**.');
+    }
+
+    // ==========================================
+    // 📊 COMMUNITY POLL COMMAND (ADMIN ONLY)
+    // ==========================================
+    if (command === 'poll') {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return message.reply('❌ Only server administrators can create polls!');
+        }
+
+        const question = args.join(' ');
+        if (!question) return message.reply('Please provide a question for the poll!');
+
+        const pollEmbed = new EmbedBuilder()
+            .setTitle('📊 Official Server Poll')
+            .setDescription(question)
+            .setColor('#F1C40F')
+            .setFooter({ text: `Created by Administrator ${message.author.username}` });
+
+        const pollMessage = await message.channel.send({ embeds: [pollEmbed] });
+        await pollMessage.react('👍');
+        await pollMessage.react('👎');
+        return;
+    }
+
+    // ==========================================
+    // 🎮 GENERAL & FUN COMMANDS
+    // ==========================================
     if (command === 'ping') {
         return message.reply(`🏓 Pong! Latency is ${Date.now() - message.createdTimestamp}ms. API Latency is ${Math.round(client.ws.ping)}ms.`);
     }
@@ -57,35 +158,116 @@ client.on('messageCreate', async (message) => {
         return message.channel.send(`🫳 ${message.author} gently patted ${target} on the head!`);
     }
 
-    // --- COMPLETE HELP COMMAND ---
-    if (command === 'help') {
-        const helpEmbed = new EmbedBuilder()
-            .setTitle('📜 Sxunya Core Command List')
-            .setColor('#5865F2')
-            .setDescription('Here are all the available commands for the server:')
-            .addFields(
-                { 
-                    name: '🎮 General & Fun', 
-                    value: '`!ping` - Check bot latency\n`!hug <@user>` - Hug someone\n`!slap <@user>` - Slap someone\n`!pat <@user>` - Pat someone on the head' 
-                },
-                { 
-                    name: '🛡️ Clan System', 
-                    value: '`!createclan <name>` - Create a new clan\n`!joinclan <name>` - Join an existing clan\n`!leaveclan` - Leave your current clan\n`!claninfo [name]` - View clan details\n`!clandelete <name>` - Delete a clan (Admin)' 
-                }
-            )
-            .setFooter({ text: 'Use ! prefix before every command.' });
-
-        return message.channel.send({ embeds: [helpEmbed] });
+    // ==========================================
+    // 💋 SOCIAL & INTERACTION COMMANDS
+    // ==========================================
+    if (command === 'kiss') {
+        const target = message.mentions.users.first() || args.join(' ');
+        if (!target) return message.reply('Mention someone to kiss!');
+        return message.channel.send(`💋 ${message.author} kissed ${target}!`);
     }
 
-    // --- CLAN COMMANDS ---
+    if (command === 'poke') {
+        const target = message.mentions.users.first() || args.join(' ');
+        if (!target) return message.reply('Mention someone to poke!');
+        return message.channel.send(`👉 ${message.author} poked ${target}!`);
+    }
+
+    if (command === 'cuddle') {
+        const target = message.mentions.users.first() || args.join(' ');
+        if (!target) return message.reply('Mention someone to cuddle!');
+        return message.channel.send(`🫂 ${message.author} cuddled up next to ${target}!`);
+    }
+
+    if (command === 'profile') {
+        const targetUser = message.mentions.users.first() || message.author;
+        const targetEco = getUserData(targetUser.id);
+        
+        let userClan = 'None';
+        for (const [name, data] of Object.entries(clans)) {
+            if (data.members.includes(targetUser.id)) {
+                userClan = name;
+                break;
+            }
+        }
+
+        const profileEmbed = new EmbedBuilder()
+            .setTitle(`👤 Profile: ${targetUser.username}`)
+            .setThumbnail(targetUser.displayAvatarURL())
+            .setColor('#3498DB')
+            .addFields(
+                { name: '💰 Wallet Balance', value: `${targetEco.balance} coins`, inline: true },
+                { name: '🛡️ Clan', value: userClan, inline: true },
+                { name: '📅 Joined Server', value: `<t:${Math.floor(message.guild.members.cache.get(targetUser.id)?.joinedTimestamp / 1000)}:R>`, inline: false }
+            );
+
+        return message.channel.send({ embeds: [profileEmbed] });
+    }
+
+    // ==========================================
+    // 💰 ECONOMY & MINIGAMES
+    // ==========================================
+    if (command === 'daily') {
+        const cooldown = 24 * 60 * 60 * 1000;
+        const now = Date.now();
+
+        if (now - userEco.lastDaily < cooldown) {
+            const timeLeft = cooldown - (now - userEco.lastDaily);
+            const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
+            const minutesLeft = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
+            return message.reply(`⌛ You already collected your daily reward! Come back in **${hoursLeft}h ${minutesLeft}m**.`);
+        }
+
+        const reward = 250;
+        userEco.balance += reward;
+        userEco.lastDaily = now;
+        saveData();
+
+        return message.reply(`🪙 You collected your daily reward of **${reward} coins**! Current Balance: **${userEco.balance} coins**.`);
+    }
+
+    if (command === 'balance' || command === 'bal') {
+        const targetUser = message.mentions.users.first() || message.author;
+        const targetEco = getUserData(targetUser.id);
+        return message.reply(`💰 **${targetUser.username}**'s Balance: **${targetEco.balance} coins**.`);
+    }
+
+    if (command === 'coinflip') {
+        const choice = args[0]?.toLowerCase();
+        const bet = parseInt(args[1]);
+
+        if (!choice || !['heads', 'tails'].includes(choice)) {
+            return message.reply('Usage: `!coinflip <heads/tails> <amount>`');
+        }
+        if (isNaN(bet) || bet <= 0) {
+            return message.reply('Please specify a valid bet amount!');
+        }
+        if (bet > userEco.balance) {
+            return message.reply('You do not have enough coins to place that bet!');
+        }
+
+        const outcome = Math.random() < 0.5 ? 'heads' : 'tails';
+        if (choice === outcome) {
+            userEco.balance += bet;
+            saveData();
+            return message.reply(`🪙 The coin landed on **${outcome}**! You won **${bet} coins**! New Balance: **${userEco.balance} coins**.`);
+        } else {
+            userEco.balance -= bet;
+            saveData();
+            return message.reply(`🪙 The coin landed on **${outcome}**! You lost **${bet} coins**. New Balance: **${userEco.balance} coins**.`);
+        }
+    }
+
+    // ==========================================
+    // 🛡️ CLAN SYSTEM & BANK
+    // ==========================================
     if (command === 'createclan') {
         const clanName = args.join(' ');
         if (!clanName) return message.reply('Please provide a clan name!');
         if (clans[clanName]) return message.reply('A clan with that name already exists!');
 
-        clans[clanName] = { owner: message.author.id, members: [message.author.id] };
-        saveClans();
+        clans[clanName] = { owner: message.author.id, members: [message.author.id], bank: 0 };
+        saveData();
         return message.reply(`✅ Clan **${clanName}** successfully created!`);
     }
 
@@ -101,7 +283,7 @@ client.on('messageCreate', async (message) => {
         }
 
         clans[match].members.push(message.author.id);
-        saveClans();
+        saveData();
         return message.reply(`🎉 You joined **${match}**!`);
     }
 
@@ -109,13 +291,16 @@ client.on('messageCreate', async (message) => {
         let leftClan = null;
         for (const [name, data] of Object.entries(clans)) {
             if (data.members.includes(message.author.id)) {
+                if (data.owner === message.author.id) {
+                    return message.reply('❌ You are the owner of this clan! Use `!deleteclan` to delete the clan instead of leaving.');
+                }
                 data.members = data.members.filter(id => id !== message.author.id);
                 leftClan = name;
                 break;
             }
         }
         if (!leftClan) return message.reply('You are not in any clan!');
-        saveClans();
+        saveData();
         return message.reply(`🚪 You left **${leftClan}**.`);
     }
 
@@ -141,22 +326,117 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 { name: 'Owner', value: `<@${data.owner}>`, inline: true },
                 { name: 'Total Members', value: `${data.members.length}`, inline: true },
+                { name: '🏦 Clan Bank', value: `${data.bank || 0} coins`, inline: true },
                 { name: 'Members', value: data.members.map(id => `<@${id}>`).join(', ') }
             );
 
         return message.channel.send({ embeds: [embed] });
     }
 
+    if (command === 'deposit' || command === 'clanbank') {
+        let userClan = null;
+        for (const [name, data] of Object.entries(clans)) {
+            if (data.members.includes(message.author.id)) {
+                userClan = name;
+                break;
+            }
+        }
+
+        if (!userClan) return message.reply('You must be in a clan to use the clan bank!');
+
+        if (command === 'clanbank') {
+            return message.reply(`🏦 Clan **${userClan}** Bank Balance: **${clans[userClan].bank || 0} coins**.`);
+        }
+
+        const amount = parseInt(args[0]);
+        if (isNaN(amount) || amount <= 0) return message.reply('Specify a valid amount to deposit!');
+        if (amount > userEco.balance) return message.reply('You do not have enough coins in your wallet!');
+
+        userEco.balance -= amount;
+        clans[userClan].bank = (clans[userClan].bank || 0) + amount;
+        saveData();
+
+        return message.reply(`🏦 Deposited **${amount} coins** into **${userClan}**'s bank!`);
+    }
+
+    // CLAN OWNER EXCLUSIVE DELETE COMMAND
+    if (command === 'deleteclan') {
+        let ownedClan = null;
+        for (const [name, data] of Object.entries(clans)) {
+            if (data.owner === message.author.id) {
+                ownedClan = name;
+                break;
+            }
+        }
+
+        if (!ownedClan) {
+            return message.reply('❌ You are not the owner of any clan!');
+        }
+
+        delete clans[ownedClan];
+        saveData();
+        return message.reply(`🗑️ Your clan **${ownedClan}** has been permanently deleted.`);
+    }
+
+    // SERVER ADMINISTRATOR OVERRIDE DELETE COMMAND
     if (command === 'clandelete') {
-        if (!message.member.permissions.has('Administrator')) {
-            return message.reply('Only server administrators can delete clans!');
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return message.reply('❌ Only server administrators can use `!clandelete`!');
         }
         const clanName = args.join(' ');
         if (!clans[clanName]) return message.reply('Clan does not exist!');
 
         delete clans[clanName];
-        saveClans();
-        return message.reply(`🗑️ Clan **${clanName}** has been deleted.`);
+        saveData();
+        return message.reply(`🗑️ Clan **${clanName}** has been deleted by Administrator.`);
+    }
+
+    // ==========================================
+    // ⚙️ SERVER UTILITIES
+    // ==========================================
+    if (command === 'serverinfo') {
+        const guild = message.guild;
+        const serverEmbed = new EmbedBuilder()
+            .setTitle(`📊 Server Info: ${guild.name}`)
+            .setThumbnail(guild.iconURL())
+            .setColor('#9B59B6')
+            .addFields(
+                { name: '👑 Owner', value: `<@${guild.ownerId}>`, inline: true },
+                { name: '👥 Total Members', value: `${guild.memberCount}`, inline: true },
+                { name: '📅 Created On', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`, inline: true }
+            );
+
+        return message.channel.send({ embeds: [serverEmbed] });
+    }
+
+    // ==========================================
+    // 📜 COMPLETE MASTER HELP MENU
+    // ==========================================
+    if (command === 'help') {
+        const helpEmbed = new EmbedBuilder()
+            .setTitle('📜 Sxunya Core Complete Command List')
+            .setColor('#5865F2')
+            .addFields(
+                { 
+                    name: '🎮 General & Fun', 
+                    value: '`!ping` - Latency check\n`!hug <@user>` - Hug someone\n`!slap <@user>` - Slap someone\n`!pat <@user>` - Pat someone\n`!kiss <@user>` - Kiss someone\n`!poke <@user>` - Poke someone\n`!cuddle <@user>` - Cuddle someone' 
+                },
+                { 
+                    name: '💰 Economy & Games', 
+                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - Check coin wallet\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
+                },
+                { 
+                    name: '🛡️ Clan System', 
+                    value: '`!createclan <name>` - Create a clan\n`!joinclan <name>` - Join a clan\n`!leaveclan` - Leave current clan\n`!deleteclan` - Delete your clan (Clan Owner Only)\n`!claninfo [name]` - View clan details\n`!clanbank` - View clan bank\n`!deposit <amount>` - Deposit coins into clan bank' 
+                },
+                { 
+                    name: '⚙️ Utilities & Admin Commands', 
+                    value: '`!serverinfo` - Display server information\n`!poll <question>` - Create a poll (Admin)\n`!enableautoroles` - Enable member auto-role (Admin)\n`!disableautoroles` - Disable member auto-role (Admin)\n`!clandelete <name>` - Delete any clan (Admin Override)' 
+                }
+            )
+            .setFooter({ text: 'Use ! prefix before every command.' });
+
+        return message.channel.send({ embeds: [helpEmbed] });
     }
 });
 
