@@ -7,10 +7,11 @@ const {
     ButtonBuilder, 
     ButtonStyle, 
     ChannelType, 
-    PermissionFlagsBits 
+    PermissionFlagsBits,
+    AttachmentBuilder
 } = require('discord.js');
 const express = require('express');
-const fs = require('fs');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 const client = new Client({
@@ -19,52 +20,73 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildBans
+        GatewayIntentBits.GuildBans,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
-// Express Server for 24/7 Uptime
+// Express Server for 24/7 Uptime (Render Keep-Alive)
 const app = express();
 const PORT = process.env.PORT || 10000;
 app.get('/', (req, res) => res.send('Sxunya Core Bot is online and operational!'));
 app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
 
-// Load Data
-let clans = {};
-let economy = {}; 
-let settings = {}; 
+// ==========================================
+// 🍃 MONGODB ATLAS DATABASE SETUP
+// ==========================================
+mongoose.connect(process.env.MONGODB_URI)
+    .then(() => console.log('✅ Successfully connected to MongoDB Atlas!'))
+    .catch(err => console.error('❌ MongoDB Connection Error:', err));
 
-if (fs.existsSync('clans.json')) {
-    clans = JSON.parse(fs.readFileSync('clans.json', 'utf8'));
-}
-if (fs.existsSync('economy.json')) {
-    economy = JSON.parse(fs.readFileSync('economy.json', 'utf8'));
-}
-if (fs.existsSync('settings.json')) {
-    settings = JSON.parse(fs.readFileSync('settings.json', 'utf8'));
+// --- Schemas ---
+const UserSchema = new mongoose.Schema({
+    userId: { type: String, required: true, unique: true },
+    balance: { type: Number, default: 100 },
+    bankBalance: { type: Number, default: 0 },
+    lastDaily: { type: Number, default: 0 },
+    lastWork: { type: Number, default: 0 },
+    lastCrime: { type: Number, default: 0 },
+    lastRob: { type: Number, default: 0 },
+    xp: { type: Number, default: 0 },
+    level: { type: Number, default: 1 },
+    inventory: { type: Array, default: [] },
+    warnings: { type: Array, default: [] }
+});
+
+const ClanSchema = new mongoose.Schema({
+    name: { type: String, required: true, unique: true },
+    owner: { type: String, required: true },
+    admins: { type: Array, default: [] },
+    members: { type: Array, default: [] },
+    bank: { type: Number, default: 0 },
+    description: { type: String, default: 'No description set.' },
+    trophies: { type: Number, default: 0 }
+});
+
+const SettingsSchema = new mongoose.Schema({
+    guildId: { type: String, required: true, unique: true },
+    autoRoleEnabled: { type: Boolean, default: false },
+    autoRoleName: { type: String, default: 'Member' },
+    modLogChannelId: { type: String, default: '' },
+    ticketLogChannelId: { type: String, default: '1502598979987308705' },
+    levelingEnabled: { type: Boolean, default: true }
+});
+
+const User = mongoose.model('User', UserSchema);
+const Clan = mongoose.model('Clan', ClanSchema);
+const Settings = mongoose.model('Settings', SettingsSchema);
+
+// --- Helper Functions ---
+async function getUserData(userId) {
+    let user = await User.findOne({ userId });
+    if (!user) user = await User.create({ userId });
+    return user;
 }
 
-function saveData() {
-    fs.writeFileSync('clans.json', JSON.stringify(clans, null, 2));
-    fs.writeFileSync('economy.json', JSON.stringify(economy, null, 2));
-    fs.writeFileSync('settings.json', JSON.stringify(settings, null, 2));
-}
-
-function getUserData(userId) {
-    if (!economy[userId]) {
-        economy[userId] = { balance: 100, lastDaily: 0, inventory: [] };
-    }
-    if (!economy[userId].inventory) {
-        economy[userId].inventory = [];
-    }
-    return economy[userId];
-}
-
-function getGuildSettings(guildId) {
-    if (!settings[guildId]) {
-        settings[guildId] = { autoRoleEnabled: false };
-    }
-    return settings[guildId];
+async function getGuildSettings(guildId) {
+    let setting = await Settings.findOne({ guildId });
+    if (!setting) setting = await Settings.create({ guildId });
+    return setting;
 }
 
 const PREFIX = '!';
@@ -76,7 +98,6 @@ const HEAD_MODERATOR_ROLE_ID = '1502659939498332160';
 const TICKET_MANAGER_ROLE_ID = '1549768702642356264';
 const ASSISTANT_MANAGER_ROLE_ID = '1542062882286739567';
 
-// Allowed Staff Roles for Moderation Commands
 const STAFF_ROLES = [
     MODERATOR_ROLE_ID,
     HEAD_MODERATOR_ROLE_ID,
@@ -84,52 +105,29 @@ const STAFF_ROLES = [
     TICKET_MANAGER_ROLE_ID
 ];
 
-// Shop Items Database
 const SHOP_ITEMS = [
-    {
-        id: 'vip',
-        name: '👑 VIP Role',
-        price: 1500,
-        description: 'Unlocks the VIP role in the server.',
-        type: 'role',
-        roleName: 'VIP'
-    },
-    {
-        id: 'title_legend',
-        name: '🔥 "Legend" Title',
-        price: 500,
-        description: 'A custom badge tag added to your profile inventory.',
-        type: 'badge'
-    },
-    {
-        id: 'mysterybox',
-        name: '🎁 Mystery Lootbox',
-        price: 300,
-        description: 'A surprise item or coin reward!',
-        type: 'consumable'
-    }
+    { id: 'vip', name: '👑 VIP Role', price: 1500, description: 'Unlocks the VIP role in the server.', type: 'role', roleName: 'VIP' },
+    { id: 'title_legend', name: '🔥 "Legend" Title', price: 500, description: 'A custom badge tag added to your profile inventory.', type: 'badge' },
+    { id: 'mysterybox', name: '🎁 Mystery Lootbox', price: 300, description: 'A surprise item or coin reward!', type: 'consumable' },
+    { id: 'shield', name: '🛡️ Rob Shield', price: 1000, description: 'Protects your wallet from getting robbed for 1 attempt.', type: 'consumable' }
 ];
 
-// Permission Helper
 function hasModPermission(member, permissionFlag) {
+    if (!member) return false;
     const hasRole = member.roles.cache.some(role => STAFF_ROLES.includes(role.id));
     const hasPerm = member.permissions.has(permissionFlag);
     return hasRole || hasPerm;
 }
 
-// Store ticket creators in memory for log tracking
 const ticketCreators = new Map();
 
 // ==========================================
-// 🎟️ TICKET BUTTON INTERACTION HANDLER
+// 🤖 CLIENT READY EVENT
 // ==========================================
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
-
-    if (interaction.customId === 'create_ticket') {
-        const ticketChannelName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
-        
+client.once('ready', () => {
+    console.log(`🤖 Logged in as ${client.user.tag}`);     client.user.setActivity('over the server \vert{} !help', { type: 3 }); });  // ========================================== // 🎟️ TICKET INTERACTION HANDLER // ========================================== client.on('interactionCreate', async (interaction) => {     if (!interaction.isButton()) return;      if (interaction.customId === 'create_ticket') {         const ticketChannelName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         const existingChannel = interaction.guild.channels.cache.find(c => c.name === ticketChannelName);
+        
         if (existingChannel) {
             return interaction.reply({ content: `❌ You already have an open ticket: ${existingChannel}`, ephemeral: true });
         }
@@ -152,25 +150,14 @@ client.on('interactionCreate', async (interaction) => {
 
             ticketCreators.set(ticketChannel.id, interaction.user.id);
 
-            // Instant Ticket Creation Log
             const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
             if (logChannel) {
                 const createLogEmbed = new EmbedBuilder()
                     .setTitle('🎟️ Ticket Created')
                     .setColor('#2ECC71')
                     .addFields(
-                        { name: '📁 Ticket Channel', value: `${ticketChannel}`, inline: true },
-                        { name: '👤 Opened By', value: `<@${interaction.user.id}>`, inline: true },
-                        { name: '⏰ Created At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
-                    )
-                    .setTimestamp();
-
-                await logChannel.send({ embeds: [createLogEmbed] }).catch(err => console.log('Could not send creation log:', err));
-            }
-
-            const welcomeTicketEmbed = new EmbedBuilder()
-                .setTitle(`🎟️ Ticket Support`)
-                .setDescription(`Hello <@${interaction.user.id}>! Thank you for opening a ticket.\nPlease describe your issue or question below and a staff member will assist you shortly.`)
+                        { name: '📁 Ticket Channel', value: `${ticketChannel}`, inline: true },                         { name: '👤 Opened By', value: `<@${interaction.user.id}>`, inline: true },
+                        { name: '⏰ Created At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }                     )                     .setTimestamp();                  await logChannel.send({ embeds: [createLogEmbed] }).catch(err => console.log('Could not send creation log:', err));             }              const welcomeTicketEmbed = new EmbedBuilder()                 .setTitle(`🎟️ Ticket Support`)                 .setDescription(`Hello <@${interaction.user.id}>! Thank you for opening a ticket.\nPlease describe your issue or question below and a staff member will assist you shortly.`)
                 .setColor('#5865F2')
                 .setFooter({ text: 'Click the button below when your issue is resolved.' });
 
@@ -198,17 +185,14 @@ client.on('interactionCreate', async (interaction) => {
         const channel = interaction.channel;
         const creatorId = ticketCreators.get(channel.id) || 'Unknown User';
 
-        // Instant Ticket Deletion Log
         const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
         if (logChannel) {
             const deleteLogEmbed = new EmbedBuilder()
                 .setTitle('🗑️ Ticket Closed & Deleted')
                 .setColor('#E74C3C')
                 .addFields(
-                    { name: '📁 Ticket Name', value: `${channel.name}`, inline: true },
-                    { name: '👤 Opened By', value: creatorId !== 'Unknown User' ? `<@${creatorId}>` : 'Unknown', inline: true },
-                    { name: '🔒 Closed By', value: `<@${interaction.user.id}>`, inline: true },
-                    { name: '⏰ Deleted At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
+                    { name: '📁 Ticket Name', value: `${channel.name}`, inline: true },                     { name: '👤 Opened By', value: creatorId !== 'Unknown User' ? `<@${creatorId}>` : 'Unknown', inline: true },
+                    { name: '🔒 Closed By', value: `<@${interaction.user.id}>`, inline: true },                     { name: '⏰ Deleted At', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: false }
                 )
                 .setTimestamp();
 
@@ -223,12 +207,14 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// Auto-Welcome System
+// ==========================================
+// 🙋 WELCOME & AUTO-ROLE EVENT
+// ==========================================
 client.on('guildMemberAdd', async (member) => {
-    const guildSettings = getGuildSettings(member.guild.id);
+    const guildSettings = await getGuildSettings(member.guild.id);
 
     if (guildSettings.autoRoleEnabled) {
-        const role = member.guild.roles.cache.find(r => r.name === 'Member');
+        const role = member.guild.roles.cache.find(r => r.name === guildSettings.autoRoleName);
         if (role) {
             await member.roles.add(role).catch(err => console.log('Could not add auto-role:', err));
         }
@@ -237,8 +223,7 @@ client.on('guildMemberAdd', async (member) => {
     const channel = member.guild.systemChannel || member.guild.channels.cache.find(ch => ch.name.includes('welcome') || ch.name.includes('general'));
     if (channel) {
         const welcomeEmbed = new EmbedBuilder()
-            .setTitle(`🎉 Welcome to ${member.guild.name}!`)
-            .setDescription(`Welcome <@${member.id}>! We're glad to have you here. Use \`!help\` to check out all bot commands!`)
+            .setTitle(`🎉 Welcome to ${member.guild.name}!`)             .setDescription(`Welcome <@${member.id}>! We're glad to have you here. Use \`!help\` to check out all bot commands!`)
             .setColor('#5865F2')
             .setThumbnail(member.user.displayAvatarURL());
         
@@ -246,274 +231,205 @@ client.on('guildMemberAdd', async (member) => {
     }
 });
 
-client.on('messageCreate', async (message) => {
-    if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+// ==========================================
+// 📝 AUDIT LOG EVENTS (DELETE & EDIT)
+// ==========================================
+client.on('messageDelete', async (message) => {
+    if (!message.guild || message.author?.bot) return;
+    const settings = await getGuildSettings(message.guild.id);
+    if (!settings.modLogChannelId) return;
+
+    const logChannel = message.guild.channels.cache.get(settings.modLogChannelId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('🗑️ Message Deleted')
+        .setColor('#E74C3C')
+        .addFields(
+            { name: 'Author', value: `${message.author.tag} (<@${message.author.id}>)`, inline: true },             { name: 'Channel', value: `<#${message.channel.id}>`, inline: true },
+            { name: 'Content', value: message.content || '*No text content*' }
+        )
+        .setTimestamp();
+
+    logChannel.send({ embeds: [embed] }).catch(() => {});
+});
+
+client.on('messageUpdate', async (oldMessage, newMessage) => {
+    if (!oldMessage.guild || oldMessage.author?.bot || oldMessage.content === newMessage.content) return;
+    const settings = await getGuildSettings(oldMessage.guild.id);
+    if (!settings.modLogChannelId) return;
+
+    const logChannel = oldMessage.guild.channels.cache.get(settings.modLogChannelId);
+    if (!logChannel) return;
+
+    const embed = new EmbedBuilder()
+        .setTitle('✏️ Message Edited')
+        .setColor('#F1C40F')
+        .addFields(
+            { name: 'Author', value: `${oldMessage.author.tag} (<@${oldMessage.author.id}>)`, inline: true },
+            { name: 'Channel', value: `<#${oldMessage.channel.id}>`, inline: true },             { name: 'Before', value: oldMessage.content \vert{}\vert{} '*Empty*' },             { name: 'After', value: newMessage.content \vert{}\vert{} '*Empty*' }         )         .setTimestamp();      logChannel.send({ embeds: [embed] }).catch(() => {}); });  // ========================================== // 💬 MAIN MESSAGE COMMANDS HANDLER // ========================================== client.on('messageCreate', async (message) => {     if (message.author.bot \vert{}\vert{} !message.guild) return;      // --- AUTOMOD LINK CHECKER ---     if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageMessages)) {         const linkRegex = /(https?:\/\/[^\s]+)/g;         if (linkRegex.test(message.content)) {             await message.delete().catch(() => {});             return message.channel.send(`⚠️ <@${message.author.id}>, posting links is prohibited here!`)
+                .then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+        }
+    }
+
+    // --- LEVELING / XP SYSTEM ---
+    const userEco = await getUserData(message.author.id);
+    const xpGained = Math.floor(Math.random() * 10) + 15;
+    userEco.xp += xpGained;
+
+    const xpNeeded = userEco.level * 100;
+    if (userEco.xp >= xpNeeded) {
+        userEco.level += 1;
+        userEco.xp -= xpNeeded;
+        message.channel.send(`🎉 Congratulations <@${message.author.id}>, you leveled up to **Level ${userEco.level}**!`).catch(() => {});
+    }
+    await userEco.save();
+
+    if (!message.content.startsWith(PREFIX)) return;
 
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    const userEco = getUserData(message.author.id);
-    const guildSettings = message.guild ? getGuildSettings(message.guild.id) : null;
-
     // ==========================================
     // 🛡️ MODERATION COMMANDS
     // ==========================================
-
     if (command === 'kick') {
-        if (!hasModPermission(message.member, PermissionsBitField.Flags.KickMembers)) {
-            return message.reply('❌ You lack the required Staff Role or permissions to kick members.');
-        }
-
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.KickMembers)) return message.reply('❌ You lack permission to kick members.');
         const target = message.mentions.members.first();
         if (!target) return message.reply('Usage: `!kick @user [reason]`');
-        if (!target.kickable) return message.reply('❌ I cannot kick this user due to role hierarchy.');
+        if (!target.kickable) return message.reply('❌ Cannot kick this user.');
 
         const reason = args.slice(1).join(' ') || 'No reason provided';
         await target.kick(reason);
-
-        const kickEmbed = new EmbedBuilder()
-            .setTitle('👢 Member Kicked')
-            .setColor('#E67E22')
-            .addFields(
-                { name: 'User', value: `${target.user.tag}`, inline: true },
-                { name: 'Moderator', value: `${message.author.tag}`, inline: true },
-                { name: 'Reason', value: reason }
-            );
-
-        return message.channel.send({ embeds: [kickEmbed] });
+        return message.reply(`✅ **${target.user.tag}** was kicked. Reason: *${reason}*`);
     }
 
     if (command === 'ban') {
-        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) {
-            return message.reply('❌ You lack the required Staff Role or permissions to ban members.');
-        }
-
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) return message.reply('❌ You lack permission to ban members.');
         const target = message.mentions.members.first();
         if (!target) return message.reply('Usage: `!ban @user [reason]`');
-        if (!target.bannable) return message.reply('❌ I cannot ban this user due to role hierarchy.');
+        if (!target.bannable) return message.reply('❌ Cannot ban this user.');
 
         const reason = args.slice(1).join(' ') || 'No reason provided';
         await target.ban({ reason });
+        return message.reply(`🔨 **${target.user.tag}** was banned. Reason: *${reason}*`);
+    }
 
-        const banEmbed = new EmbedBuilder()
-            .setTitle('🔨 Member Banned')
-            .setColor('#C0392B')
-            .addFields(
-                { name: 'User', value: `${target.user.tag}`, inline: true },
-                { name: 'Moderator', value: `${message.author.tag}`, inline: true },
-                { name: 'Reason', value: reason }
-            );
+    if (command === 'softban') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) return message.reply('❌ You lack permission.');
+        const target = message.mentions.members.first();
+        if (!target) return message.reply('Usage: `!softban @user [reason]`');
 
-        return message.channel.send({ embeds: [banEmbed] });
+        const reason = args.slice(1).join(' ') || 'Softban';
+        await target.ban({ deleteMessageDays: 7, reason });
+        await message.guild.members.unban(target.id);
+        return message.reply(`🧹 **${target.user.tag}** softbanned (kicked and 7 days of messages cleared).`);
     }
 
     if (command === 'unban') {
-        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) {
-            return message.reply('❌ You lack the required Staff Role or permissions to unban members.');
-        }
-
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) return message.reply('❌ You lack permission.');
         const userId = args[0];
-        if (!userId) return message.reply('Usage: `!unban <userID>`');
+        if (!userId) return message.reply('Usage: `!unban <user_id>`');
 
         try {
             await message.guild.members.unban(userId);
-            return message.reply(`✅ Successfully unbanned user ID \`${userId}\`.`);
-        } catch (error) {
-            return message.reply('❌ Unable to unban user. Verify the User ID and ban status.');
+            return message.reply(`✅ Successfully unbanned ID: \`${userId}\``);
+        } catch {
+            return message.reply('❌ User not found or not banned.');
         }
     }
 
-    if (command === 'timeout') {
-        if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
-            return message.reply('❌ You lack the required Staff Role or permissions to timeout members.');
-        }
-
+    if (command === 'mute' || command === 'timeout') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) return message.reply('❌ You lack permission.');
         const target = message.mentions.members.first();
-        const durationMinutes = parseInt(args[1]);
+        const minutes = parseInt(args[1]);
+        if (!target || isNaN(minutes)) return message.reply('Usage: `!mute @user <minutes> [reason]`');
 
-        if (!target || isNaN(durationMinutes) || durationMinutes <= 0) {
-            return message.reply('Usage: `!timeout @user <duration_in_minutes> [reason]`');
-        }
-
-        if (!target.moderatable) return message.reply('❌ I cannot place this user in timeout due to role hierarchy.');
-
-        const durationMs = durationMinutes * 60 * 1000;
         const reason = args.slice(2).join(' ') || 'No reason provided';
-
-        await target.timeout(durationMs, reason);
-
-        const timeoutEmbed = new EmbedBuilder()
-            .setTitle('⏰ Member Timed Out')
-            .setColor('#F1C40F')
-            .addFields(
-                { name: 'User', value: `${target.user.tag}`, inline: true },
-                { name: 'Duration', value: `${durationMinutes} minutes`, inline: true },
-                { name: 'Moderator', value: `${message.author.tag}`, inline: true },
-                { name: 'Reason', value: reason }
-            );
-
-        return message.channel.send({ embeds: [timeoutEmbed] });
+        await target.timeout(minutes * 60 * 1000, reason);
+        return message.reply(`🔇 **${target.user.tag}** timed out for **${minutes}m**. Reason: *${reason}*`);
     }
 
-    if (command === 'removetimeout' || command === 'untimeout') {
-        if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
-            return message.reply('❌ You lack the required Staff Role or permissions to remove timeouts.');
-        }
-
+    if (command === 'unmute') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) return message.reply('❌ You lack permission.');
         const target = message.mentions.members.first();
-        if (!target) return message.reply('Usage: `!removetimeout @user`');
+        if (!target) return message.reply('Usage: `!unmute @user`');
 
-        if (!target.communicationDisabledUntilTimestamp) {
-            return message.reply('❌ This user is not currently in timeout.');
-        }
-
-        await target.timeout(null, `Timeout removed by ${message.author.tag}`);
-        return message.reply(`✅ Removed timeout for ${target}.`);
+        await target.timeout(null);
+        return message.reply(`🔊 Mute removed for **${target.user.tag}**.`);
     }
 
-    // ==========================================
-    // 🎟️ TICKET SETUP COMMAND
-    // ==========================================
-    if (command === 'setup-ticket') {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only server administrators can use `!setup-ticket`!');
-        }
+    if (command === 'clear' || command === 'purge') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageMessages)) return message.reply('❌ You lack permission.');
+        const amount = parseInt(args[0]);
+        if (isNaN(amount) || amount < 1 || amount > 100) return message.reply('Specify a number between 1 and 100.');
 
-        const ticketEmbed = new EmbedBuilder()
-            .setTitle('📩 Support Ticket Panel')
-            .setDescription('Need help, have a question, or need to contact staff?\nClick the button below to open a private support ticket!')
-            .setColor('#3498DB');
-
-        const ticketRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setCustomId('create_ticket')
-                .setLabel('📩 Create Ticket')
-                .setStyle(ButtonStyle.Primary)
-        );
-
-        await message.channel.send({ embeds: [ticketEmbed], components: [ticketRow] });
-        return message.delete().catch(() => {});
+        await message.channel.bulkDelete(amount + 1, true);
+        return message.channel.send(`🧹 Deleted **${amount}** messages.`).then(m => setTimeout(() => m.delete().catch(() => {}), 3000));
     }
 
-    // ==========================================
-    // ⚙️ TOGGLABLE AUTO-ROLE COMMANDS
-    // ==========================================
-    if (command === 'enableautoroles') {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only server administrators can use this command!');
-        }
+    if (command === 'warn') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageMessages)) return message.reply('❌ You lack permission.');
+        const targetUser = message.mentions.users.first();
+        if (!targetUser) return message.reply('Usage: `!warn @user <reason>`');
 
-        guildSettings.autoRoleEnabled = true;
-        saveData();
-        return message.reply('✅ Auto-roles have been **enabled**!');
+        const reason = args.slice(1).join(' ');
+        if (!reason) return message.reply('Please provide a reason.');
+
+        const targetEco = await getUserData(targetUser.id);
+        targetEco.warnings.push({ reason, moderator: message.author.id, date: new Date() });
+        await targetEco.save();
+
+        return message.reply(`⚠️ Warned **${targetUser.tag}**. Reason: *${reason}* (Total warnings:${targetEco.warnings.length})`);
     }
 
-    if (command === 'disableautoroles') {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only server administrators can use this command!');
-        }
-
-        guildSettings.autoRoleEnabled = false;
-        saveData();
-        return message.reply('🛑 Auto-roles have been **disabled**.');
-    }
-
-    // ==========================================
-    // 📊 COMMUNITY POLL COMMAND
-    // ==========================================
-    if (command === 'poll') {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only server administrators can create polls!');
-        }
-
-        const question = args.join(' ');
-        if (!question) return message.reply('Please provide a question for the poll!');
-
-        const pollEmbed = new EmbedBuilder()
-            .setTitle('📊 Official Server Poll')
-            .setDescription(question)
-            .setColor('#F1C40F')
-            .setFooter({ text: `Created by Administrator ${message.author.username}` });
-
-        const pollMessage = await message.channel.send({ embeds: [pollEmbed] });
-        await pollMessage.react('👍');
-        await pollMessage.react('👎');
-        return;
-    }
-
-    // ==========================================
-    // 🎮 GENERAL & FUN COMMANDS
-    // ==========================================
-    if (command === 'ping') {
-        return message.reply(`🏓 Pong! Latency: ${Date.now() - message.createdTimestamp}ms. API Latency: ${Math.round(client.ws.ping)}ms.`);
-    }
-
-    if (command === 'hug') {
-        const target = message.mentions.users.first() || args.join(' ');
-        if (!target) return message.reply('Mention someone to hug!');
-        return message.channel.send(`🤗 ${message.author} gave ${target} a warm hug!`);
-    }
-
-    if (command === 'slap') {
-        const target = message.mentions.users.first() || args.join(' ');
-        if (!target) return message.reply('Mention someone to slap!');
-        return message.channel.send(`🖐️ ${message.author} slapped ${target}! Ouch!`);
-    }
-
-    if (command === 'pat') {
-        const target = message.mentions.users.first() || args.join(' ');
-        if (!target) return message.reply('Mention someone to pat!');
-        return message.channel.send(`🫳 ${message.author} gently patted ${target} on the head!`);
-    }
-
-    if (command === 'kiss') {
-        const target = message.mentions.users.first() || args.join(' ');
-        if (!target) return message.reply('Mention someone to kiss!');
-        return message.channel.send(`💋 ${message.author} kissed ${target}!`);
-    }
-
-    if (command === 'poke') {
-        const target = message.mentions.users.first() || args.join(' ');
-        if (!target) return message.reply('Mention someone to poke!');
-        return message.channel.send(`👉 ${message.author} poked ${target}!`);
-    }
-
-    if (command === 'cuddle') {
-        const target = message.mentions.users.first() || args.join(' ');
-        if (!target) return message.reply('Mention someone to cuddle!');
-        return message.channel.send(`🫂 ${message.author} cuddled up next to ${target}!`);
-    }
-
-    if (command === 'profile') {
+    if (command === 'warnings') {
         const targetUser = message.mentions.users.first() || message.author;
-        const targetEco = getUserData(targetUser.id);
-        
-        let userClan = 'None';
-        for (const [name, data] of Object.entries(clans)) {
-            if (data.members.includes(targetUser.id)) {
-                userClan = name;
-                break;
-            }
-        }
+        const targetEco = await getUserData(targetUser.id);
 
-        const itemsCount = targetEco.inventory ? targetEco.inventory.length : 0;
+        if (targetEco.warnings.length === 0) return message.reply(`✅ **${targetUser.username}** has no warnings.`);
 
-        const profileEmbed = new EmbedBuilder()
-            .setTitle(`👤 Profile: ${targetUser.username}`)
-            .setThumbnail(targetUser.displayAvatarURL())
-            .setColor('#3498DB')
-            .addFields(
-                { name: '💰 Wallet Balance', value: `${targetEco.balance} coins`, inline: true },
-                { name: '🛡️ Clan', value: userClan, inline: true },
-                { name: '🎒 Items Owned', value: `${itemsCount} item(s)`, inline: true },
-                { name: '📅 Joined Server', value: `<t:${Math.floor(message.guild.members.cache.get(targetUser.id)?.joinedTimestamp / 1000)}:R>`, inline: false }
-            );
+        const warnEmbed = new EmbedBuilder()
+            .setTitle(`⚠️ Warnings for ${targetUser.username}`)
+            .setColor('#E74C3C')
+            .setDescription(targetEco.warnings.map((w, index) => `**#${index + 1}** — ${w.reason} (By: <@${w.moderator}>)`).join('\n'));
 
-        return message.channel.send({ embeds: [profileEmbed] });
+        return message.channel.send({ embeds: [warnEmbed] });
+    }
+
+    if (command === 'lock') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageChannels)) return message.reply('❌ You lack permission.');
+        await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: false });
+        return message.reply('🔒 Channel locked down.');
+    }
+
+    if (command === 'unlock') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageChannels)) return message.reply('❌ You lack permission.');
+        await message.channel.permissionOverwrites.edit(message.guild.roles.everyone, { SendMessages: null });
+        return message.reply('🔓 Channel unlocked.');
+    }
+
+    if (command === 'slowmode') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageChannels)) return message.reply('❌ You lack permission.');
+        const seconds = parseInt(args[0]);
+        if (isNaN(seconds)) return message.reply('Usage: `!slowmode <seconds>`');
+
+        await message.channel.setRateLimitPerUser(seconds);
+        return message.reply(`⏱️ Slowmode set to **${seconds}s**.`);
+    }
+
+    if (command === 'nick' || command === 'nickname') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ManageNicknames)) return message.reply('❌ You lack permission.');
+        const target = message.mentions.members.first();
+        if (!target) return message.reply('Usage: `!nick @user <new_nickname>`');
+
+        const newNick = args.slice(1).join(' ');
+        await target.setNickname(newNick);
+        return message.reply(`✅ Nickname updated for **${target.user.username}**.`);
     }
 
     // ==========================================
-    // 💰 ECONOMY & SHOP SYSTEM
+    // 🪙 ECONOMY & MINI-GAMES COMMANDS
     // ==========================================
     if (command === 'daily') {
         const cooldown = 24 * 60 * 60 * 1000;
@@ -523,35 +439,171 @@ client.on('messageCreate', async (message) => {
             const timeLeft = cooldown - (now - userEco.lastDaily);
             const hoursLeft = Math.floor(timeLeft / (1000 * 60 * 60));
             const minutesLeft = Math.floor((timeLeft % (1000 * 60 * 60)) / (1000 * 60));
-            return message.reply(`⌛ You already collected your daily reward! Come back in **${hoursLeft}h ${minutesLeft}m**.`);
+            return message.reply(`⌛ Daily collected! Return in **${hoursLeft}h${minutesLeft}m**.`);
         }
 
         const reward = 250;
         userEco.balance += reward;
         userEco.lastDaily = now;
-        saveData();
+        await userEco.save();
 
-        return message.reply(`🪙 You collected your daily reward of **${reward} coins**! Balance: **${userEco.balance} coins**.`);
+        return message.reply(`🪙 You received **${reward} coins**! Current Balance: **${userEco.balance}**.`);
+    }
+
+    if (command === 'work') {
+        const cooldown = 60 * 60 * 1000;
+        const now = Date.now();
+
+        if (now - userEco.lastWork < cooldown) {
+            const minutesLeft = Math.floor((cooldown - (now - userEco.lastWork)) / (1000 * 60));
+            return message.reply(`💼 You are tired! Rest for **${minutesLeft}m** before working again.`);
+        }
+
+        const jobs = ['Programmer', 'Discord Mod', 'Barista', 'Gamer', 'Graphic Designer'];
+        const job = jobs[Math.floor(Math.random() * jobs.length)];
+        const earned = Math.floor(Math.random() * 150) + 50;
+
+        userEco.balance += earned;
+        userEco.lastWork = now;
+        await userEco.save();
+
+        return message.reply(`💼 Worked as a **${job}** and earned **${earned} coins**!`);
+    }
+
+    if (command === 'crime') {
+        const cooldown = 2 * 60 * 60 * 1000;
+        const now = Date.now();
+
+        if (now - userEco.lastCrime < cooldown) {
+            const minutesLeft = Math.floor((cooldown - (now - userEco.lastCrime)) / (1000 * 60));
+            return message.reply(`🚓 Lay low! You can attempt a crime in **${minutesLeft}m**.`);
+        }
+
+        userEco.lastCrime = now;
+        const success = Math.random() > 0.45;
+
+        if (success) {
+            const reward = Math.floor(Math.random() * 300) + 150;
+            userEco.balance += reward;
+            await userEco.save();
+            return message.reply(`🥷 Successful heist! You looted **${reward} coins**!`);
+        } else {
+            const penalty = Math.floor(Math.random() * 100) + 50;
+            userEco.balance = Math.max(0, userEco.balance - penalty);
+            await userEco.save();
+            return message.reply(`🚔 You got caught by the cops and fined **${penalty} coins**!`);
+        }
+    }
+
+    if (command === 'rob') {
+        const target = message.mentions.users.first();
+        if (!target) return message.reply('Usage: `!rob @user`');
+        if (target.id === message.author.id) return message.reply('❌ You cannot rob yourself.');
+
+        const targetEco = await getUserData(target.id);
+        if (targetEco.balance < 50) return message.reply('❌ Target is too poor to rob!');
+
+        const success = Math.random() > 0.5;
+        if (success) {
+            const stolen = Math.floor(targetEco.balance * (Math.random() * 0.4 + 0.1));
+            targetEco.balance -= stolen;
+            userEco.balance += stolen;
+            await targetEco.save();
+            await userEco.save();
+            return message.reply(`🥷 You robbed **${stolen} coins** from ${target}!`);
+        } else {
+            const fine = 100;
+            userEco.balance = Math.max(0, userEco.balance - fine);
+            await userEco.save();
+            return message.reply(`🚨 You failed the robbery and paid a **${fine} coin** fine!`);
+        }
     }
 
     if (command === 'balance' || command === 'bal') {
         const targetUser = message.mentions.users.first() || message.author;
-        const targetEco = getUserData(targetUser.id);
-        return message.reply(`💰 **${targetUser.username}**'s Balance: **${targetEco.balance} coins**.`);
+        const targetEco = await getUserData(targetUser.id);
+        return message.reply(`💰 **${targetUser.username}**'s Wallet: **${targetEco.balance} coins** \vert{} Bank: **${targetEco.bankBalance} coins**.`);
+    }
+
+    if (command === 'deposit' || command === 'dep') {
+        const amount = args[0] === 'all' ? userEco.balance : parseInt(args[0]);
+        if (isNaN(amount) || amount <= 0) return message.reply('Specify a valid amount.');
+        if (amount > userEco.balance) return message.reply('❌ Insufficient balance.');
+
+        userEco.balance -= amount;
+        userEco.bankBalance += amount;
+        await userEco.save();
+
+        return message.reply(`🏦 Deposited **${amount} coins** into your personal bank account!`);
+    }
+
+    if (command === 'withdraw' || command === 'with') {
+        const amount = args[0] === 'all' ? userEco.bankBalance : parseInt(args[0]);
+        if (isNaN(amount) || amount <= 0) return message.reply('Specify a valid amount.');
+        if (amount > userEco.bankBalance) return message.reply('❌ Insufficient bank funds.');
+
+        userEco.bankBalance -= amount;
+        userEco.balance += amount;
+        await userEco.save();
+
+        return message.reply(`💵 Withdrew **${amount} coins** from your bank account!`);
+    }
+
+    if (command === 'slots') {
+        const bet = parseInt(args[0]);
+        if (isNaN(bet) || bet <= 0) return message.reply('Usage: `!slots <bet_amount>`');
+        if (bet > userEco.balance) return message.reply('❌ Insufficient balance!');
+
+        const items = ['🎰', '🍒', '🍋', '🔔', '💎'];
+        const r1 = items[Math.floor(Math.random() * items.length)];
+        const r2 = items[Math.floor(Math.random() * items.length)];
+        const r3 = items[Math.floor(Math.random() * items.length)];
+
+        let winnings = 0;
+        if (r1 === r2 && r2 === r3) {
+            winnings = bet * 5;
+        } else if (r1 === r2 || r2 === r3 || r1 === r3) {
+            winnings = bet * 2;
+        }
+
+        if (winnings > 0) {
+            userEco.balance += winnings;
+            await userEco.save();
+            return message.reply(`[ ${r1} | ${r2} \vert{}${r3} ]\n🎉 YOU WON **${winnings} coins**!`);
+        } else {
+            userEco.balance -= bet;
+            await userEco.save();
+            return message.reply(`[ ${r1} | ${r2} \vert{}${r3} ]\n❌ You lost **${bet} coins**.`);
+        }
+    }
+
+    if (command === 'coinflip' || command === 'cf') {
+        const choice = args[0]?.toLowerCase();
+        const bet = parseInt(args[1]);
+
+        if (!['heads', 'tails'].includes(choice) || isNaN(bet) || bet <= 0) {
+            return message.reply('Usage: `!coinflip <heads/tails> <bet_amount>`');
+        }
+        if (bet > userEco.balance) return message.reply('❌ Insufficient coins.');
+
+        const result = Math.random() > 0.5 ? 'heads' : 'tails';
+        if (choice === result) {
+            userEco.balance += bet;
+            await userEco.save();
+            return message.reply(`🪙 Flipped **${result}**! You won **${bet} coins**!`);
+        } else {
+            userEco.balance -= bet;
+            await userEco.save();
+            return message.reply(`🪙 Flipped **${result}**! You lost **${bet} coins**.`);
+        }
     }
 
     if (command === 'shop') {
         const shopEmbed = new EmbedBuilder()
             .setTitle('🛒 Server Economy Shop')
             .setColor('#F1C40F')
-            .setDescription('Use `!buy <item_id>` to purchase an item!')
-            .setFooter({ text: `Your Balance: ${userEco.balance} coins` });
-
-        SHOP_ITEMS.forEach(item => {
-            shopEmbed.addFields({
-                name: `${item.name} — ${item.price} coins`,
-                value: `**ID:** \`${item.id}\`\n${item.description}`
-            });
+            .setDescription('Use `!buy <item_id>` to buy items!')
+            .setFooter({ text: `Balance: ${userEco.balance} coins` });          SHOP_ITEMS.forEach(i => {             shopEmbed.addFields({ name: `${i.name} — ${i.price} coins`, value: `**ID:** \`${i.id}\`\n${i.description}` });
         });
 
         return message.channel.send({ embeds: [shopEmbed] });
@@ -559,274 +611,191 @@ client.on('messageCreate', async (message) => {
 
     if (command === 'buy') {
         const itemId = args[0]?.toLowerCase();
-        if (!itemId) return message.reply('Usage: `!buy <item_id>` (Use `!shop` to view item IDs)');
-
         const item = SHOP_ITEMS.find(i => i.id === itemId);
-        if (!item) return message.reply('❌ Invalid Item ID! Type `!shop` to check available item IDs.');
+        if (!item) return message.reply('❌ Invalid Item ID.');
 
-        if (userEco.balance < item.price) {
-            return message.reply(`❌ You do not have enough coins! You need **${item.price} coins**, but only have **${userEco.balance} coins**.`);
-        }
+        if (userEco.balance < item.price) return message.reply('❌ Insufficient balance!');
 
-        if (userEco.inventory.includes(item.name)) {
-            return message.reply(`❌ You already own **${item.name}**!`);
-        }
-
-        // Deduct Coins & Add Item
         userEco.balance -= item.price;
         userEco.inventory.push(item.name);
+        await userEco.save();
 
-        // Handle Role Granting if applicable
-        if (item.type === 'role') {
-            const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === item.roleName.toLowerCase());
-            if (role) {
-                await message.member.roles.add(role).catch(err => console.log('Could not assign shop role:', err));
-            }
-        }
-
-        saveData();
-
-        return message.reply(`🎉 You successfully bought **${item.name}** for **${item.price} coins**! New Balance: **${userEco.balance} coins**.`);
+        return message.reply(`🎉 Purchased **${item.name}**!`);
     }
 
     if (command === 'inventory' || command === 'inv') {
         const targetUser = message.mentions.users.first() || message.author;
-        const targetEco = getUserData(targetUser.id);
+        const targetEco = await getUserData(targetUser.id);
 
-        const itemsList = targetEco.inventory && targetEco.inventory.length > 0 
-            ? targetEco.inventory.map(item => `• ${item}`).join('\n') 
-            : 'No items in inventory.';
-
-        const invEmbed = new EmbedBuilder()
-            .setTitle(`🎒 Inventory: ${targetUser.username}`)
+        const itemsList = targetEco.inventory.length > 0 ? targetEco.inventory.map(i => `• ${i}`).join('\n') : 'Empty Inventory.';         const embed = new EmbedBuilder()             .setTitle(`🎒 Inventory: ${targetUser.username}`)
             .setColor('#2ECC71')
-            .setDescription(itemsList)
-            .setThumbnail(targetUser.displayAvatarURL());
+            .setDescription(itemsList);
 
-        return message.channel.send({ embeds: [invEmbed] });
-    }
-
-    if (command === 'coinflip') {
-        const choice = args[0]?.toLowerCase();
-        const bet = parseInt(args[1]);
-
-        if (!choice || !['heads', 'tails'].includes(choice)) {
-            return message.reply('Usage: `!coinflip <heads/tails> <amount>`');
-        }
-        if (isNaN(bet) || bet <= 0) {
-            return message.reply('Please specify a valid bet amount!');
-        }
-        if (bet > userEco.balance) {
-            return message.reply('You do not have enough coins to place that bet!');
-        }
-
-        const outcome = Math.random() < 0.5 ? 'heads' : 'tails';
-        if (choice === outcome) {
-            userEco.balance += bet;
-            saveData();
-            return message.reply(`🪙 The coin landed on **${outcome}**! You won **${bet} coins**! New Balance: **${userEco.balance} coins**.`);
-        } else {
-            userEco.balance -= bet;
-            saveData();
-            return message.reply(`🪙 The coin landed on **${outcome}**! You lost **${bet} coins**. New Balance: **${userEco.balance} coins**.`);
-        }
-    }
-
-    if (command === 'givemoney' || command === 'pay') {
-        const targetUser = message.mentions.users.first();
-        const amount = parseInt(args[1]);
-
-        if (!targetUser) return message.reply('Usage: `!givemoney @user <amount>`');
-        if (targetUser.id === message.author.id) return message.reply('❌ You cannot send coins to yourself!');
-        if (targetUser.bot) return message.reply('❌ You cannot send coins to a bot!');
-        if (isNaN(amount) || amount <= 0) return message.reply('Please specify a valid amount of coins!');
-        if (amount > userEco.balance) return message.reply(`❌ You do not have enough coins! Balance: **${userEco.balance} coins**.`);
-
-        const targetEco = getUserData(targetUser.id);
-        userEco.balance -= amount;
-        targetEco.balance += amount;
-        saveData();
-
-        return message.reply(`💸 Transferred **${amount} coins** to ${targetUser}!`);
+        return message.channel.send({ embeds: [embed] });
     }
 
     // ==========================================
-    // 🛡️ CLAN SYSTEM
+    // ⚔️ CLAN SYSTEM
     // ==========================================
     if (command === 'createclan') {
         const clanName = args.join(' ');
-        if (!clanName) return message.reply('Please provide a clan name!');
-        if (clans[clanName]) return message.reply('A clan with that name already exists!');
+        if (!clanName) return message.reply('Provide a clan name.');
 
-        clans[clanName] = { owner: message.author.id, members: [message.author.id], bank: 0 };
-        saveData();
-        return message.reply(`✅ Clan **${clanName}** created!`);
+        const existing = await Clan.findOne({ name: clanName });
+        if (existing) return message.reply('Clan name already taken.');
+
+        await Clan.create({
+            name: clanName,
+            owner: message.author.id,
+            members: [message.author.id]
+        });
+
+        return message.reply(`⚔️ Clan **${clanName}** successfully established!`);
     }
 
     if (command === 'joinclan') {
-        const searchName = args.join(' ').toLowerCase();
-        if (!searchName) return message.reply('Please specify a clan to join!');
+        const searchName = args.join(' ');
+        const clan = await Clan.findOne({ name: new RegExp(`^${searchName}$`, 'i') });
+        if (!clan) return message.reply('Clan not found.');
 
-        const match = Object.keys(clans).find(c => c.toLowerCase() === searchName);
-        if (!match) return message.reply('Clan not found!');
+        if (clan.members.includes(message.author.id)) return message.reply('You are already in this clan.');
 
-        if (clans[match].members.includes(message.author.id)) {
-            return message.reply('You are already in this clan!');
-        }
-
-        clans[match].members.push(message.author.id);
-        saveData();
-        return message.reply(`🎉 You joined **${match}**!`);
+        clan.members.push(message.author.id);
+        await clan.save();
+        return message.reply(`🎉 Joined **${clan.name}**!`);
     }
 
     if (command === 'leaveclan') {
-        let leftClan = null;
-        for (const [name, data] of Object.entries(clans)) {
-            if (data.members.includes(message.author.id)) {
-                if (data.owner === message.author.id) {
-                    return message.reply('❌ You are the owner of this clan! Use `!deleteclan` to delete it instead.');
-                }
-                data.members = data.members.filter(id => id !== message.author.id);
-                leftClan = name;
-                break;
-            }
-        }
-        if (!leftClan) return message.reply('You are not in any clan!');
-        saveData();
-        return message.reply(`🚪 You left **${leftClan}**.`);
+        const clan = await Clan.findOne({ members: message.author.id });
+        if (!clan) return message.reply('You are not in a clan.');
+        if (clan.owner === message.author.id) return message.reply('Owners must delete the clan using `!deleteclan`.');
+
+        clan.members = clan.members.filter(id => id !== message.author.id);
+        await clan.save();
+        return message.reply(`🚪 Left **${clan.name}**.`);
     }
 
     if (command === 'claninfo') {
         const searchName = args.join(' ');
-        let targetClan = searchName;
+        let clan = searchName ? await Clan.findOne({ name: new RegExp(`^${searchName}$`, 'i') }) : await Clan.findOne({ members: message.author.id });
 
-        if (!targetClan) {
-            for (const [name, data] of Object.entries(clans)) {
-                if (data.members.includes(message.author.id)) {
-                    targetClan = name;
-                    break;
-                }
-            }
-        }
+        if (!clan) return message.reply('Clan not found.');
 
-        if (!targetClan || !clans[targetClan]) return message.reply('Clan not found or you are not in one!');
-
-        const data = clans[targetClan];
         const embed = new EmbedBuilder()
-            .setTitle(`🛡️ Clan: ${targetClan}`)
-            .setColor('#FFD700')
-            .addFields(
-                { name: 'Owner', value: `<@${data.owner}>`, inline: true },
-                { name: 'Total Members', value: `${data.members.length}`, inline: true },
-                { name: '🏦 Clan Bank', value: `${data.bank || 0} coins`, inline: true },
-                { name: 'Members', value: data.members.map(id => `<@${id}>`).join(', ') }
+            .setTitle(`🛡️ Clan: ${clan.name}`)             .setColor('#FFD700')             .addFields(                 { name: 'Owner', value: `<@${clan.owner}>`, inline: true },
+                { name: 'Members', value: `${clan.members.length}`, inline: true },                 { name: 'Bank', value: `${clan.bank} coins`, inline: true },
+                { name: 'Description', value: clan.description }
             );
 
         return message.channel.send({ embeds: [embed] });
     }
 
-    if (command === 'deposit' || command === 'clanbank') {
-        let userClan = null;
-        for (const [name, data] of Object.entries(clans)) {
-            if (data.members.includes(message.author.id)) {
-                userClan = name;
-                break;
-            }
-        }
-
-        if (!userClan) return message.reply('You must be in a clan to use the clan bank!');
-
-        if (command === 'clanbank') {
-            return message.reply(`🏦 Clan **${userClan}** Bank Balance: **${clans[userClan].bank || 0} coins**.`);
-        }
-
-        const amount = parseInt(args[0]);
-        if (isNaN(amount) || amount <= 0) return message.reply('Specify a valid amount to deposit!');
-        if (amount > userEco.balance) return message.reply('You do not have enough coins!');
-
-        userEco.balance -= amount;
-        clans[userClan].bank = (clans[userClan].bank || 0) + amount;
-        saveData();
-
-        return message.reply(`🏦 Deposited **${amount} coins** into **${userClan}**'s bank!`);
-    }
-
     if (command === 'deleteclan') {
-        let ownedClan = null;
-        for (const [name, data] of Object.entries(clans)) {
-            if (data.owner === message.author.id) {
-                ownedClan = name;
-                break;
-            }
-        }
+        const clan = await Clan.findOne({ owner: message.author.id });
+        if (!clan) return message.reply('You do not own a clan.');
 
-        if (!ownedClan) return message.reply('❌ You are not the owner of any clan!');
-
-        delete clans[ownedClan];
-        saveData();
-        return message.reply(`🗑️ Your clan **${ownedClan}** has been deleted.`);
-    }
-
-    if (command === 'clandelete') {
-        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only administrators can use `!clandelete`!');
-        }
-        const clanName = args.join(' ');
-        if (!clans[clanName]) return message.reply('Clan does not exist!');
-
-        delete clans[clanName];
-        saveData();
-        return message.reply(`🗑️ Clan **${clanName}** deleted by Administrator.`);
+        await Clan.deleteOne({ name: clan.name });
+        return message.reply(`🗑️ Clan **${clan.name}** deleted.`);
     }
 
     // ==========================================
-    // ⚙️ SERVER UTILITIES
+    // 📊 LEVEL & LEADERBOARD SYSTEM
     // ==========================================
-    if (command === 'serverinfo') {
-        const guild = message.guild;
-        const serverEmbed = new EmbedBuilder()
-            .setTitle(`📊 Server Info: ${guild.name}`)
-            .setThumbnail(guild.iconURL())
+    if (command === 'rank' || command === 'level') {
+        const targetUser = message.mentions.users.first() || message.author;
+        const targetEco = await getUserData(targetUser.id);
+
+        const embed = new EmbedBuilder()
+            .setTitle(`⭐ Level Status: ${targetUser.username}`)
             .setColor('#9B59B6')
             .addFields(
-                { name: '👑 Owner', value: `<@${guild.ownerId}>`, inline: true },
-                { name: '👥 Total Members', value: `${guild.memberCount}`, inline: true },
-                { name: '📅 Created On', value: `<t:${Math.floor(guild.createdTimestamp / 1000)}:D>`, inline: true }
+                { name: 'Level', value: `\`${targetEco.level}\``, inline: true },
+                { name: 'Current XP', value: `\`${targetEco.xp} / ${targetEco.level * 100}\``, inline: true }
             );
 
-        return message.channel.send({ embeds: [serverEmbed] });
+        return message.channel.send({ embeds: [embed] });
+    }
+
+    if (command === 'leaderboard' || command === 'lb') {
+        const topUsers = await User.find({}).sort({ balance: -1 }).limit(10);
+        
+        let desc = '';
+        topUsers.forEach((u, i) => {
+            desc += `**#${i + 1}** <@${u.userId}> — **${u.balance} coins**\n`;
+        });
+
+        const lbEmbed = new EmbedBuilder()
+            .setTitle('🏆 Economy Leaderboard')
+            .setColor('#F1C40F')
+            .setDescription(desc || 'No rankings recorded yet.');
+
+        return message.channel.send({ embeds: [lbEmbed] });
     }
 
     // ==========================================
-    // 📜 FULL HELP MENU
+    // ⚙️ UTILITY & CONFIGURATION COMMANDS
     // ==========================================
+    if (command === 'setlogchannel') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.Administrator)) return message.reply('❌ Admin required.');
+        const settings = await getGuildSettings(message.guild.id);
+        settings.modLogChannelId = message.channel.id;
+        await settings.save();
+        return message.reply(`✅ Set <#${message.channel.id}> as the audit log channel.`);
+    }
+
+    if (command === 'setup-ticket') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.Administrator)) return message.reply('❌ Admin required.');
+
+        const ticketPanelEmbed = new EmbedBuilder()
+            .setTitle('🎟️ Support Tickets')
+            .setDescription('Click below to open a private support ticket with staff!')
+            .setColor('#5865F2');
+
+        const ticketButton = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('create_ticket')
+                .setLabel('📩 Open Ticket')
+                .setStyle(ButtonStyle.Primary)
+        );
+
+        await message.channel.send({ embeds: [ticketPanelEmbed], components: [ticketButton] });
+        return message.delete().catch(() => {});
+    }
+
+    if (command === 'avatar') {
+        const target = message.mentions.users.first() || message.author;
+        const embed = new EmbedBuilder()
+            .setTitle(`${target.username}'s Avatar`)
+            .setImage(target.displayAvatarURL({ dynamic: true, size: 512 }))
+            .setColor('#5865F2');
+
+        return message.channel.send({ embeds: [embed] });
+    }
+
+    if (command === 'serverinfo') {
+        const embed = new EmbedBuilder()
+            .setTitle(`📊 ${message.guild.name} Info`)
+            .setColor('#5865F2')
+            .setThumbnail(message.guild.iconURL())
+            .addFields(
+                { name: 'Total Members', value: `${message.guild.memberCount}`, inline: true },
+                { name: 'Created On', value: `<t:${Math.floor(message.guild.createdTimestamp / 1000)}:D>`, inline: true },
+                { name: 'Server Owner', value: `<@${message.guild.ownerId}>`, inline: true }
+            );
+
+        return message.channel.send({ embeds: [embed] });
+    }
+
     if (command === 'help') {
         const helpEmbed = new EmbedBuilder()
-            .setTitle('📜 Sxunya Core Master Help Menu')
+            .setTitle('📜 Sxunya Core Full Command Matrix')
             .setColor('#5865F2')
             .addFields(
-                { 
-                    name: '🛡️ Moderation Commands (Staff Allowed)', 
-                    value: '`!kick <@user> [reason]` - Kick a member\n`!ban <@user> [reason]` - Ban a member\n`!unban <userID>` - Unban a member by User ID\n`!timeout <@user> <mins> [reason]` - Timeout a member\n`!removetimeout <@user>` - Remove an active timeout' 
-                },
-                { 
-                    name: '🎮 General & Fun Actions', 
-                    value: '`!ping` - Check latency\n`!hug <@user>` - Hug someone\n`!slap <@user>` - Slap someone\n`!pat <@user>` - Pat someone\n`!kiss <@user>` - Kiss someone\n`!poke <@user>` - Poke someone\n`!cuddle <@user>` - Cuddle someone' 
-                },
-                { 
-                    name: '💰 Economy & Shop', 
-                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - View wallet balance\n`!shop` - Open item shop\n`!buy <item_id>` - Purchase item\n`!inventory` or `!inv` - View items\n`!givemoney <@user> <amount>` - Send coins to a member\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
-                },
-                { 
-                    name: '🛡️ Clan System', 
-                    value: '`!createclan <name>` - Create a new clan\n`!joinclan <name>` - Join an existing clan\n`!leaveclan` - Leave current clan\n`!deleteclan` - Delete owned clan\n`!claninfo [name]` - Check clan details\n`!clanbank` - View clan balance\n`!deposit <amount>` - Deposit coins into clan bank' 
-                },
-                { 
-                    name: '⚙️ Utilities & Admin Commands', 
-                    value: '`!serverinfo` - Display server information\n`!setup-ticket` - Create a ticket panel\n`!poll <question>` - Create a 👍/👎 poll\n`!enableautoroles` - Enable member auto-role\n`!disableautoroles` - Disable member auto-role\n`!clandelete <name>` - Admin clan deletion override' 
-                }
-            )
-            .setFooter({ text: 'Use ! prefix before every command.' });
+                { name: '🛡️ Moderation', value: '`!kick`, `!ban`, `!softban`, `!unban`, `!mute`, `!unmute`, `!warn`, `!warnings`, `!lock`, `!unlock`, `!slowmode`, `!clear`, `!nick`' },
+                { name: '🪙 Economy & Games', value: '`!daily`, `!work`, `!crime`, `!rob`, `!balance`, `!deposit`, `!withdraw`, `!slots`, `!coinflip`, `!shop`, `!buy`, `!inventory`, `!leaderboard`' },
+                { name: '⚔️ Clans', value: '`!createclan`, `!joinclan`, `!leaveclan`, `!claninfo`, `!deleteclan`' },
+                { name: '📊 XP & Utility', value: '`!rank`, `!setup-ticket`, `!setlogchannel`, `!avatar`, `!serverinfo`' }
+            );
 
         return message.channel.send({ embeds: [helpEmbed] });
     }
