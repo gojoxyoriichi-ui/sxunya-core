@@ -52,7 +52,10 @@ function saveData() {
 
 function getUserData(userId) {
     if (!economy[userId]) {
-        economy[userId] = { balance: 100, lastDaily: 0 };
+        economy[userId] = { balance: 100, lastDaily: 0, inventory: [] };
+    }
+    if (!economy[userId].inventory) {
+        economy[userId].inventory = [];
     }
     return economy[userId];
 }
@@ -79,6 +82,32 @@ const STAFF_ROLES = [
     HEAD_MODERATOR_ROLE_ID,
     ASSISTANT_MANAGER_ROLE_ID,
     TICKET_MANAGER_ROLE_ID
+];
+
+// Shop Items Database
+const SHOP_ITEMS = [
+    {
+        id: 'vip',
+        name: '👑 VIP Role',
+        price: 1500,
+        description: 'Unlocks the VIP role in the server.',
+        type: 'role',
+        roleName: 'VIP'
+    },
+    {
+        id: 'title_legend',
+        name: '🔥 "Legend" Title',
+        price: 500,
+        description: 'A custom badge tag added to your profile inventory.',
+        type: 'badge'
+    },
+    {
+        id: 'mysterybox',
+        name: '🎁 Mystery Lootbox',
+        price: 300,
+        description: 'A surprise item or coin reward!',
+        type: 'consumable'
+    }
 ];
 
 // Permission Helper
@@ -152,7 +181,6 @@ client.on('interactionCreate', async (interaction) => {
                     .setStyle(ButtonStyle.Danger)
             );
 
-            // Tag Moderator, Head Moderator, and Ticket Manager inside ticket
             const pingMessage = `<@${interaction.user.id}> <@&${MODERATOR_ROLE_ID}> <@&${HEAD_MODERATOR_ROLE_ID}> <@&${TICKET_MANAGER_ROLE_ID}>`;
 
             await ticketChannel.send({ content: pingMessage, embeds: [welcomeTicketEmbed], components: [closeButton] });
@@ -231,7 +259,6 @@ client.on('messageCreate', async (message) => {
     // 🛡️ MODERATION COMMANDS
     // ==========================================
 
-    // !kick @user [reason]
     if (command === 'kick') {
         if (!hasModPermission(message.member, PermissionsBitField.Flags.KickMembers)) {
             return message.reply('❌ You lack the required Staff Role or permissions to kick members.');
@@ -245,7 +272,7 @@ client.on('messageCreate', async (message) => {
         await target.kick(reason);
 
         const kickEmbed = new EmbedBuilder()
-            .setTitle('`👢` Member Kicked')
+            .setTitle('👢 Member Kicked')
             .setColor('#E67E22')
             .addFields(
                 { name: 'User', value: `${target.user.tag}`, inline: true },
@@ -256,7 +283,6 @@ client.on('messageCreate', async (message) => {
         return message.channel.send({ embeds: [kickEmbed] });
     }
 
-    // !ban @user [reason]
     if (command === 'ban') {
         if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) {
             return message.reply('❌ You lack the required Staff Role or permissions to ban members.');
@@ -281,7 +307,6 @@ client.on('messageCreate', async (message) => {
         return message.channel.send({ embeds: [banEmbed] });
     }
 
-    // !unban <userID>
     if (command === 'unban') {
         if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) {
             return message.reply('❌ You lack the required Staff Role or permissions to unban members.');
@@ -298,7 +323,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // !timeout @user <minutes> [reason]
     if (command === 'timeout') {
         if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
             return message.reply('❌ You lack the required Staff Role or permissions to timeout members.');
@@ -331,7 +355,6 @@ client.on('messageCreate', async (message) => {
         return message.channel.send({ embeds: [timeoutEmbed] });
     }
 
-    // !removetimeout @user
     if (command === 'removetimeout' || command === 'untimeout') {
         if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
             return message.reply('❌ You lack the required Staff Role or permissions to remove timeouts.');
@@ -473,6 +496,8 @@ client.on('messageCreate', async (message) => {
             }
         }
 
+        const itemsCount = targetEco.inventory ? targetEco.inventory.length : 0;
+
         const profileEmbed = new EmbedBuilder()
             .setTitle(`👤 Profile: ${targetUser.username}`)
             .setThumbnail(targetUser.displayAvatarURL())
@@ -480,6 +505,7 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 { name: '💰 Wallet Balance', value: `${targetEco.balance} coins`, inline: true },
                 { name: '🛡️ Clan', value: userClan, inline: true },
+                { name: '🎒 Items Owned', value: `${itemsCount} item(s)`, inline: true },
                 { name: '📅 Joined Server', value: `<t:${Math.floor(message.guild.members.cache.get(targetUser.id)?.joinedTimestamp / 1000)}:R>`, inline: false }
             );
 
@@ -487,7 +513,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ==========================================
-    // 💰 ECONOMY & MINIGAMES
+    // 💰 ECONOMY & SHOP SYSTEM
     // ==========================================
     if (command === 'daily') {
         const cooldown = 24 * 60 * 60 * 1000;
@@ -512,6 +538,72 @@ client.on('messageCreate', async (message) => {
         const targetUser = message.mentions.users.first() || message.author;
         const targetEco = getUserData(targetUser.id);
         return message.reply(`💰 **${targetUser.username}**'s Balance: **${targetEco.balance} coins**.`);
+    }
+
+    if (command === 'shop') {
+        const shopEmbed = new EmbedBuilder()
+            .setTitle('🛒 Server Economy Shop')
+            .setColor('#F1C40F')
+            .setDescription('Use `!buy <item_id>` to purchase an item!')
+            .setFooter({ text: `Your Balance: ${userEco.balance} coins` });
+
+        SHOP_ITEMS.forEach(item => {
+            shopEmbed.addFields({
+                name: `${item.name} — ${item.price} coins`,
+                value: `**ID:** \`${item.id}\`\n${item.description}`
+            });
+        });
+
+        return message.channel.send({ embeds: [shopEmbed] });
+    }
+
+    if (command === 'buy') {
+        const itemId = args[0]?.toLowerCase();
+        if (!itemId) return message.reply('Usage: `!buy <item_id>` (Use `!shop` to view item IDs)');
+
+        const item = SHOP_ITEMS.find(i => i.id === itemId);
+        if (!item) return message.reply('❌ Invalid Item ID! Type `!shop` to check available item IDs.');
+
+        if (userEco.balance < item.price) {
+            return message.reply(`❌ You do not have enough coins! You need **${item.price} coins**, but only have **${userEco.balance} coins**.`);
+        }
+
+        if (userEco.inventory.includes(item.name)) {
+            return message.reply(`❌ You already own **${item.name}**!`);
+        }
+
+        // Deduct Coins & Add Item
+        userEco.balance -= item.price;
+        userEco.inventory.push(item.name);
+
+        // Handle Role Granting if applicable
+        if (item.type === 'role') {
+            const role = message.guild.roles.cache.find(r => r.name.toLowerCase() === item.roleName.toLowerCase());
+            if (role) {
+                await message.member.roles.add(role).catch(err => console.log('Could not assign shop role:', err));
+            }
+        }
+
+        saveData();
+
+        return message.reply(`🎉 You successfully bought **${item.name}** for **${item.price} coins**! New Balance: **${userEco.balance} coins**.`);
+    }
+
+    if (command === 'inventory' || command === 'inv') {
+        const targetUser = message.mentions.users.first() || message.author;
+        const targetEco = getUserData(targetUser.id);
+
+        const itemsList = targetEco.inventory && targetEco.inventory.length > 0 
+            ? targetEco.inventory.map(item => `• ${item}`).join('\n') 
+            : 'No items in inventory.';
+
+        const invEmbed = new EmbedBuilder()
+            .setTitle(`🎒 Inventory: ${targetUser.username}`)
+            .setColor('#2ECC71')
+            .setDescription(itemsList)
+            .setThumbnail(targetUser.displayAvatarURL());
+
+        return message.channel.send({ embeds: [invEmbed] });
     }
 
     if (command === 'coinflip') {
@@ -715,15 +807,15 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 { 
                     name: '🛡️ Moderation Commands (Staff Allowed)', 
-                    value: '`!kick <@user> [reason]` - Kick a member\n`!ban <@user> [reason]` - Ban a member\n`!unban <userID>` - Unban a member by User ID\n`!timeout <@user> <mins> [reason]` - Timeout a member\n`!removetimeout <@user>` - Remove a active timeout' 
+                    value: '`!kick <@user> [reason]` - Kick a member\n`!ban <@user> [reason]` - Ban a member\n`!unban <userID>` - Unban a member by User ID\n`!timeout <@user> <mins> [reason]` - Timeout a member\n`!removetimeout <@user>` - Remove an active timeout' 
                 },
                 { 
                     name: '🎮 General & Fun Actions', 
                     value: '`!ping` - Check latency\n`!hug <@user>` - Hug someone\n`!slap <@user>` - Slap someone\n`!pat <@user>` - Pat someone\n`!kiss <@user>` - Kiss someone\n`!poke <@user>` - Poke someone\n`!cuddle <@user>` - Cuddle someone' 
                 },
                 { 
-                    name: '💰 Economy & Profile', 
-                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - View wallet balance\n`!givemoney <@user> <amount>` - Send coins to a member\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
+                    name: '💰 Economy & Shop', 
+                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - View wallet balance\n`!shop` - Open item shop\n`!buy <item_id>` - Purchase item\n`!inventory` or `!inv` - View items\n`!givemoney <@user> <amount>` - Send coins to a member\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
                 },
                 { 
                     name: '🛡️ Clan System', 
