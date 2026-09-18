@@ -1,4 +1,14 @@
-const { Client, GatewayIntentBits, EmbedBuilder, PermissionsBitField } = require('discord.js');
+const { 
+    Client, 
+    GatewayIntentBits, 
+    EmbedBuilder, 
+    PermissionsBitField, 
+    ActionRowBuilder, 
+    ButtonBuilder, 
+    ButtonStyle, 
+    ChannelType, 
+    PermissionFlagsBits 
+} = require('discord.js');
 const express = require('express');
 const fs = require('fs');
 require('dotenv').config();
@@ -55,6 +65,76 @@ function getGuildSettings(guildId) {
 
 const PREFIX = '!';
 
+// ==========================================
+// 🎟️ TICKET BUTTON INTERACTION HANDLER
+// ==========================================
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isButton()) return;
+
+    // Handle "Create Ticket" Button Click
+    if (interaction.customId === 'create_ticket') {
+        const ticketChannelName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
+        
+        // Check if user already has an open ticket
+        const existingChannel = interaction.guild.channels.cache.find(c => c.name === ticketChannelName);
+        if (existingChannel) {
+            return interaction.reply({ content: `❌ You already have an open ticket: ${existingChannel}`, ephemeral: true });
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+
+        try {
+            // Create private ticket channel
+            const ticketChannel = await interaction.guild.channels.create({
+                name: ticketChannelName,
+                type: ChannelType.GuildText,
+                permissionOverwrites: [
+                    {
+                        id: interaction.guild.id, // @everyone role
+                        deny: [PermissionFlagsBits.ViewChannel], // Hide from everyone
+                    },
+                    {
+                        id: interaction.user.id, // Ticket Creator
+                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
+                    },
+                    {
+                        id: client.user.id, // Bot itself
+                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
+                    }
+                ],
+            });
+
+            const welcomeTicketEmbed = new EmbedBuilder()
+                .setTitle(`🎟️ Ticket Support`)
+                .setDescription(`Hello <@${interaction.user.id}>! Thank you for opening a ticket.\nPlease describe your issue or question below and a staff member will assist you shortly.`)
+                .setColor('#5865F2')
+                .setFooter({ text: 'Click the button below when your issue is resolved.' });
+
+            const closeButton = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setCustomId('close_ticket')
+                    .setLabel('🔒 Close Ticket')
+                    .setStyle(ButtonStyle.Danger)
+            );
+
+            await ticketChannel.send({ content: `<@${interaction.user.id}>`, embeds: [welcomeTicketEmbed], components: [closeButton] });
+            return interaction.editReply({ content: `✅ Ticket created! Check out your channel: ${ticketChannel}` });
+
+        } catch (error) {
+            console.error('Error creating ticket channel:', error);
+            return interaction.editReply({ content: '❌ Failed to create ticket channel. Please make sure the bot has **Manage Channels** permissions!' });
+        }
+    }
+
+    // Handle "Close Ticket" Button Click
+    if (interaction.customId === 'close_ticket') {
+        await interaction.reply('🔒 Closing and deleting this ticket in 5 seconds...');
+        setTimeout(() => {
+            interaction.channel.delete().catch(err => console.log('Could not delete ticket channel:', err));
+        }, 5000);
+    }
+});
+
 // --- EVENT: AUTO-WELCOME & TOGGLABLE AUTO-ROLE ---
 client.on('guildMemberAdd', async (member) => {
     const guildSettings = getGuildSettings(member.guild.id);
@@ -86,6 +166,30 @@ client.on('messageCreate', async (message) => {
 
     const userEco = getUserData(message.author.id);
     const guildSettings = message.guild ? getGuildSettings(message.guild.id) : null;
+
+    // ==========================================
+    // 🎟️ TICKET SETUP COMMAND (ADMIN ONLY)
+    // ==========================================
+    if (command === 'setup-ticket') {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            return message.reply('❌ Only server administrators can setup the ticket system!');
+        }
+
+        const ticketEmbed = new EmbedBuilder()
+            .setTitle('📩 Support Ticket Panel')
+            .setDescription('Need help, have a question, or need to contact staff?\nClick the button below to open a private support ticket!')
+            .setColor('#3498DB');
+
+        const ticketRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+                .setCustomId('create_ticket')
+                .setLabel('📩 Create Ticket')
+                .setStyle(ButtonStyle.Primary)
+        );
+
+        await message.channel.send({ embeds: [ticketEmbed], components: [ticketRow] });
+        return message.delete().catch(() => {});
+    }
 
     // ==========================================
     // ⚙️ TOGGLABLE AUTO-ROLE COMMANDS (ADMIN)
@@ -258,7 +362,6 @@ client.on('messageCreate', async (message) => {
         }
     }
 
-    // GIVE MONEY / TRANSFER COMMAND
     if (command === 'givemoney' || command === 'pay') {
         const targetUser = message.mentions.users.first();
         const amount = parseInt(args[1]);
@@ -458,7 +561,7 @@ client.on('messageCreate', async (message) => {
                 },
                 { 
                     name: '⚙️ Utilities & Admin Commands', 
-                    value: '`!serverinfo` - Display server information\n`!poll <question>` - Create a poll (Admin)\n`!enableautoroles` - Enable member auto-role (Admin)\n`!disableautoroles` - Disable member auto-role (Admin)\n`!clandelete <name>` - Delete any clan (Admin Override)' 
+                    value: '`!serverinfo` - Display server information\n`!setup-ticket` - Create a ticket panel (Admin)\n`!poll <question>` - Create a poll (Admin)\n`!enableautoroles` - Enable member auto-role (Admin)\n`!disableautoroles` - Disable member auto-role (Admin)\n`!clandelete <name>` - Delete any clan (Admin Override)' 
                 }
             )
             .setFooter({ text: 'Use ! prefix before every command.' });
