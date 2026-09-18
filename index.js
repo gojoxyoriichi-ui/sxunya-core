@@ -258,6 +258,35 @@ client.on('messageCreate', async (message) => {
         }
     }
 
+    // GIVE MONEY / TRANSFER COMMAND
+    if (command === 'givemoney' || command === 'pay') {
+        const targetUser = message.mentions.users.first();
+        const amount = parseInt(args[1]);
+
+        if (!targetUser) {
+            return message.reply('Usage: `!givemoney @user <amount>`');
+        }
+        if (targetUser.id === message.author.id) {
+            return message.reply('❌ You cannot send coins to yourself!');
+        }
+        if (targetUser.bot) {
+            return message.reply('❌ You cannot send coins to a bot!');
+        }
+        if (isNaN(amount) || amount <= 0) {
+            return message.reply('Please specify a valid amount of coins to send!');
+        }
+        if (amount > userEco.balance) {
+            return message.reply(`❌ You do not have enough coins! Your balance is **${userEco.balance} coins**.`);
+        }
+
+        const targetEco = getUserData(targetUser.id);
+        userEco.balance -= amount;
+        targetEco.balance += amount;
+        saveData();
+
+        return message.reply(`💸 Successfully transferred **${amount} coins** to ${targetUser}!`);
+    }
+
     // ==========================================
     // 🛡️ CLAN SYSTEM & BANK
     // ==========================================
@@ -359,7 +388,6 @@ client.on('messageCreate', async (message) => {
         return message.reply(`🏦 Deposited **${amount} coins** into **${userClan}**'s bank!`);
     }
 
-    // CLAN OWNER EXCLUSIVE DELETE COMMAND
     if (command === 'deleteclan') {
         let ownedClan = null;
         for (const [name, data] of Object.entries(clans)) {
@@ -378,7 +406,6 @@ client.on('messageCreate', async (message) => {
         return message.reply(`🗑️ Your clan **${ownedClan}** has been permanently deleted.`);
     }
 
-    // SERVER ADMINISTRATOR OVERRIDE DELETE COMMAND
     if (command === 'clandelete') {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
             return message.reply('❌ Only server administrators can use `!clandelete`!');
@@ -423,7 +450,7 @@ client.on('messageCreate', async (message) => {
                 },
                 { 
                     name: '💰 Economy & Games', 
-                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - Check coin wallet\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
+                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - Check coin wallet\n`!givemoney <@user> <amount>` - Transfer coins to a user\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
                 },
                 { 
                     name: '🛡️ Clan System', 
