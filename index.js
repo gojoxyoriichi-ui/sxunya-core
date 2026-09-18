@@ -18,7 +18,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildBans
     ]
 });
 
@@ -70,6 +71,22 @@ const TICKET_LOG_CHANNEL_ID = '1502598979987308705';
 const MODERATOR_ROLE_ID = '1483100413552230450';
 const HEAD_MODERATOR_ROLE_ID = '1502659939498332160';
 const TICKET_MANAGER_ROLE_ID = '1549768702642356264';
+const ASSISTANT_MANAGER_ROLE_ID = '1542062882286739567';
+
+// Allowed Staff Roles for Moderation Commands
+const STAFF_ROLES = [
+    MODERATOR_ROLE_ID,
+    HEAD_MODERATOR_ROLE_ID,
+    ASSISTANT_MANAGER_ROLE_ID,
+    TICKET_MANAGER_ROLE_ID
+];
+
+// Permission Helper
+function hasModPermission(member, permissionFlag) {
+    const hasRole = member.roles.cache.some(role => STAFF_ROLES.includes(role.id));
+    const hasPerm = member.permissions.has(permissionFlag);
+    return hasRole || hasPerm;
+}
 
 // Store ticket creators in memory for log tracking
 const ticketCreators = new Map();
@@ -80,11 +97,9 @@ const ticketCreators = new Map();
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
-    // Handle "Create Ticket" Button Click
     if (interaction.customId === 'create_ticket') {
         const ticketChannelName = `ticket-${interaction.user.username.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         
-        // Check if user already has an open ticket
         const existingChannel = interaction.guild.channels.cache.find(c => c.name === ticketChannelName);
         if (existingChannel) {
             return interaction.reply({ content: `❌ You already have an open ticket: ${existingChannel}`, ephemeral: true });
@@ -93,42 +108,22 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.deferReply({ ephemeral: true });
 
         try {
-            // Create private ticket channel
             const ticketChannel = await interaction.guild.channels.create({
                 name: ticketChannelName,
                 type: ChannelType.GuildText,
                 permissionOverwrites: [
-                    {
-                        id: interaction.guild.id, // @everyone role
-                        deny: [PermissionFlagsBits.ViewChannel], // Hide from everyone
-                    },
-                    {
-                        id: interaction.user.id, // Ticket Creator
-                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
-                    },
-                    {
-                        id: MODERATOR_ROLE_ID, // Moderator Role
-                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
-                    },
-                    {
-                        id: HEAD_MODERATOR_ROLE_ID, // Head Moderator Role
-                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
-                    },
-                    {
-                        id: TICKET_MANAGER_ROLE_ID, // Ticket Manager Role
-                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles],
-                    },
-                    {
-                        id: client.user.id, // Bot itself
-                        allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels],
-                    }
+                    { id: interaction.guild.id, deny: [PermissionFlagsBits.ViewChannel] },
+                    { id: interaction.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles] },
+                    { id: MODERATOR_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles] },
+                    { id: HEAD_MODERATOR_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles] },
+                    { id: TICKET_MANAGER_ROLE_ID, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.AttachFiles] },
+                    { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] }
                 ],
             });
 
-            // Save creator info for logging
             ticketCreators.set(ticketChannel.id, interaction.user.id);
 
-            // INSTANT LOG: Send creation log to ticket-log channel
+            // Instant Ticket Creation Log
             const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
             if (logChannel) {
                 const createLogEmbed = new EmbedBuilder()
@@ -157,7 +152,7 @@ client.on('interactionCreate', async (interaction) => {
                     .setStyle(ButtonStyle.Danger)
             );
 
-            // Ping Creator + Moderator + Head Moderator + Ticket Manager
+            // Tag Moderator, Head Moderator, and Ticket Manager inside ticket
             const pingMessage = `<@${interaction.user.id}> <@&${MODERATOR_ROLE_ID}> <@&${HEAD_MODERATOR_ROLE_ID}> <@&${TICKET_MANAGER_ROLE_ID}>`;
 
             await ticketChannel.send({ content: pingMessage, embeds: [welcomeTicketEmbed], components: [closeButton] });
@@ -165,18 +160,17 @@ client.on('interactionCreate', async (interaction) => {
 
         } catch (error) {
             console.error('Error creating ticket channel:', error);
-            return interaction.editReply({ content: '❌ Failed to create ticket channel. Please make sure the bot has **Manage Channels** permissions!' });
+            return interaction.editReply({ content: '❌ Failed to create ticket channel. Make sure the bot has **Manage Channels** permissions!' });
         }
     }
 
-    // Handle "Close Ticket" Button Click
     if (interaction.customId === 'close_ticket') {
         await interaction.reply('🔒 Closing and deleting this ticket in 5 seconds...');
 
         const channel = interaction.channel;
         const creatorId = ticketCreators.get(channel.id) || 'Unknown User';
 
-        // INSTANT LOG: Send deletion log to ticket-log channel
+        // Instant Ticket Deletion Log
         const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
         if (logChannel) {
             const deleteLogEmbed = new EmbedBuilder()
@@ -201,7 +195,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// --- EVENT: AUTO-WELCOME & TOGGLABLE AUTO-ROLE ---
+// Auto-Welcome System
 client.on('guildMemberAdd', async (member) => {
     const guildSettings = getGuildSettings(member.guild.id);
 
@@ -234,7 +228,128 @@ client.on('messageCreate', async (message) => {
     const guildSettings = message.guild ? getGuildSettings(message.guild.id) : null;
 
     // ==========================================
-    // 🎟️ TICKET SETUP COMMAND (STRICT ADMIN ONLY)
+    // 🛡️ MODERATION COMMANDS
+    // ==========================================
+
+    // !kick @user [reason]
+    if (command === 'kick') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.KickMembers)) {
+            return message.reply('❌ You lack the required Staff Role or permissions to kick members.');
+        }
+
+        const target = message.mentions.members.first();
+        if (!target) return message.reply('Usage: `!kick @user [reason]`');
+        if (!target.kickable) return message.reply('❌ I cannot kick this user due to role hierarchy.');
+
+        const reason = args.slice(1).join(' ') || 'No reason provided';
+        await target.kick(reason);
+
+        const kickEmbed = new EmbedBuilder()
+            .setTitle('`👢` Member Kicked')
+            .setColor('#E67E22')
+            .addFields(
+                { name: 'User', value: `${target.user.tag}`, inline: true },
+                { name: 'Moderator', value: `${message.author.tag}`, inline: true },
+                { name: 'Reason', value: reason }
+            );
+
+        return message.channel.send({ embeds: [kickEmbed] });
+    }
+
+    // !ban @user [reason]
+    if (command === 'ban') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) {
+            return message.reply('❌ You lack the required Staff Role or permissions to ban members.');
+        }
+
+        const target = message.mentions.members.first();
+        if (!target) return message.reply('Usage: `!ban @user [reason]`');
+        if (!target.bannable) return message.reply('❌ I cannot ban this user due to role hierarchy.');
+
+        const reason = args.slice(1).join(' ') || 'No reason provided';
+        await target.ban({ reason });
+
+        const banEmbed = new EmbedBuilder()
+            .setTitle('🔨 Member Banned')
+            .setColor('#C0392B')
+            .addFields(
+                { name: 'User', value: `${target.user.tag}`, inline: true },
+                { name: 'Moderator', value: `${message.author.tag}`, inline: true },
+                { name: 'Reason', value: reason }
+            );
+
+        return message.channel.send({ embeds: [banEmbed] });
+    }
+
+    // !unban <userID>
+    if (command === 'unban') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.BanMembers)) {
+            return message.reply('❌ You lack the required Staff Role or permissions to unban members.');
+        }
+
+        const userId = args[0];
+        if (!userId) return message.reply('Usage: `!unban <userID>`');
+
+        try {
+            await message.guild.members.unban(userId);
+            return message.reply(`✅ Successfully unbanned user ID \`${userId}\`.`);
+        } catch (error) {
+            return message.reply('❌ Unable to unban user. Verify the User ID and ban status.');
+        }
+    }
+
+    // !timeout @user <minutes> [reason]
+    if (command === 'timeout') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
+            return message.reply('❌ You lack the required Staff Role or permissions to timeout members.');
+        }
+
+        const target = message.mentions.members.first();
+        const durationMinutes = parseInt(args[1]);
+
+        if (!target || isNaN(durationMinutes) || durationMinutes <= 0) {
+            return message.reply('Usage: `!timeout @user <duration_in_minutes> [reason]`');
+        }
+
+        if (!target.moderatable) return message.reply('❌ I cannot place this user in timeout due to role hierarchy.');
+
+        const durationMs = durationMinutes * 60 * 1000;
+        const reason = args.slice(2).join(' ') || 'No reason provided';
+
+        await target.timeout(durationMs, reason);
+
+        const timeoutEmbed = new EmbedBuilder()
+            .setTitle('⏰ Member Timed Out')
+            .setColor('#F1C40F')
+            .addFields(
+                { name: 'User', value: `${target.user.tag}`, inline: true },
+                { name: 'Duration', value: `${durationMinutes} minutes`, inline: true },
+                { name: 'Moderator', value: `${message.author.tag}`, inline: true },
+                { name: 'Reason', value: reason }
+            );
+
+        return message.channel.send({ embeds: [timeoutEmbed] });
+    }
+
+    // !removetimeout @user
+    if (command === 'removetimeout' || command === 'untimeout') {
+        if (!hasModPermission(message.member, PermissionsBitField.Flags.ModerateMembers)) {
+            return message.reply('❌ You lack the required Staff Role or permissions to remove timeouts.');
+        }
+
+        const target = message.mentions.members.first();
+        if (!target) return message.reply('Usage: `!removetimeout @user`');
+
+        if (!target.communicationDisabledUntilTimestamp) {
+            return message.reply('❌ This user is not currently in timeout.');
+        }
+
+        await target.timeout(null, `Timeout removed by ${message.author.tag}`);
+        return message.reply(`✅ Removed timeout for ${target}.`);
+    }
+
+    // ==========================================
+    // 🎟️ TICKET SETUP COMMAND
     // ==========================================
     if (command === 'setup-ticket') {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -258,7 +373,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ==========================================
-    // ⚙️ TOGGLABLE AUTO-ROLE COMMANDS (ADMIN)
+    // ⚙️ TOGGLABLE AUTO-ROLE COMMANDS
     // ==========================================
     if (command === 'enableautoroles') {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -267,7 +382,7 @@ client.on('messageCreate', async (message) => {
 
         guildSettings.autoRoleEnabled = true;
         saveData();
-        return message.reply('✅ Auto-roles have been **enabled**! New members will automatically receive the "Member" role.');
+        return message.reply('✅ Auto-roles have been **enabled**!');
     }
 
     if (command === 'disableautoroles') {
@@ -281,7 +396,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ==========================================
-    // 📊 COMMUNITY POLL COMMAND (ADMIN ONLY)
+    // 📊 COMMUNITY POLL COMMAND
     // ==========================================
     if (command === 'poll') {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
@@ -307,7 +422,7 @@ client.on('messageCreate', async (message) => {
     // 🎮 GENERAL & FUN COMMANDS
     // ==========================================
     if (command === 'ping') {
-        return message.reply(`🏓 Pong! Latency is ${Date.now() - message.createdTimestamp}ms. API Latency is ${Math.round(client.ws.ping)}ms.`);
+        return message.reply(`🏓 Pong! Latency: ${Date.now() - message.createdTimestamp}ms. API Latency: ${Math.round(client.ws.ping)}ms.`);
     }
 
     if (command === 'hug') {
@@ -328,9 +443,6 @@ client.on('messageCreate', async (message) => {
         return message.channel.send(`🫳 ${message.author} gently patted ${target} on the head!`);
     }
 
-    // ==========================================
-    // 💋 SOCIAL & INTERACTION COMMANDS
-    // ==========================================
     if (command === 'kiss') {
         const target = message.mentions.users.first() || args.join(' ');
         if (!target) return message.reply('Mention someone to kiss!');
@@ -393,7 +505,7 @@ client.on('messageCreate', async (message) => {
         userEco.lastDaily = now;
         saveData();
 
-        return message.reply(`🪙 You collected your daily reward of **${reward} coins**! Current Balance: **${userEco.balance} coins**.`);
+        return message.reply(`🪙 You collected your daily reward of **${reward} coins**! Balance: **${userEco.balance} coins**.`);
     }
 
     if (command === 'balance' || command === 'bal') {
@@ -432,32 +544,22 @@ client.on('messageCreate', async (message) => {
         const targetUser = message.mentions.users.first();
         const amount = parseInt(args[1]);
 
-        if (!targetUser) {
-            return message.reply('Usage: `!givemoney @user <amount>`');
-        }
-        if (targetUser.id === message.author.id) {
-            return message.reply('❌ You cannot send coins to yourself!');
-        }
-        if (targetUser.bot) {
-            return message.reply('❌ You cannot send coins to a bot!');
-        }
-        if (isNaN(amount) || amount <= 0) {
-            return message.reply('Please specify a valid amount of coins to send!');
-        }
-        if (amount > userEco.balance) {
-            return message.reply(`❌ You do not have enough coins! Your balance is **${userEco.balance} coins**.`);
-        }
+        if (!targetUser) return message.reply('Usage: `!givemoney @user <amount>`');
+        if (targetUser.id === message.author.id) return message.reply('❌ You cannot send coins to yourself!');
+        if (targetUser.bot) return message.reply('❌ You cannot send coins to a bot!');
+        if (isNaN(amount) || amount <= 0) return message.reply('Please specify a valid amount of coins!');
+        if (amount > userEco.balance) return message.reply(`❌ You do not have enough coins! Balance: **${userEco.balance} coins**.`);
 
         const targetEco = getUserData(targetUser.id);
         userEco.balance -= amount;
         targetEco.balance += amount;
         saveData();
 
-        return message.reply(`💸 Successfully transferred **${amount} coins** to ${targetUser}!`);
+        return message.reply(`💸 Transferred **${amount} coins** to ${targetUser}!`);
     }
 
     // ==========================================
-    // 🛡️ CLAN SYSTEM & BANK
+    // 🛡️ CLAN SYSTEM
     // ==========================================
     if (command === 'createclan') {
         const clanName = args.join(' ');
@@ -466,7 +568,7 @@ client.on('messageCreate', async (message) => {
 
         clans[clanName] = { owner: message.author.id, members: [message.author.id], bank: 0 };
         saveData();
-        return message.reply(`✅ Clan **${clanName}** successfully created!`);
+        return message.reply(`✅ Clan **${clanName}** created!`);
     }
 
     if (command === 'joinclan') {
@@ -490,7 +592,7 @@ client.on('messageCreate', async (message) => {
         for (const [name, data] of Object.entries(clans)) {
             if (data.members.includes(message.author.id)) {
                 if (data.owner === message.author.id) {
-                    return message.reply('❌ You are the owner of this clan! Use `!deleteclan` to delete the clan instead of leaving.');
+                    return message.reply('❌ You are the owner of this clan! Use `!deleteclan` to delete it instead.');
                 }
                 data.members = data.members.filter(id => id !== message.author.id);
                 leftClan = name;
@@ -548,7 +650,7 @@ client.on('messageCreate', async (message) => {
 
         const amount = parseInt(args[0]);
         if (isNaN(amount) || amount <= 0) return message.reply('Specify a valid amount to deposit!');
-        if (amount > userEco.balance) return message.reply('You do not have enough coins in your wallet!');
+        if (amount > userEco.balance) return message.reply('You do not have enough coins!');
 
         userEco.balance -= amount;
         clans[userClan].bank = (clans[userClan].bank || 0) + amount;
@@ -566,25 +668,23 @@ client.on('messageCreate', async (message) => {
             }
         }
 
-        if (!ownedClan) {
-            return message.reply('❌ You are not the owner of any clan!');
-        }
+        if (!ownedClan) return message.reply('❌ You are not the owner of any clan!');
 
         delete clans[ownedClan];
         saveData();
-        return message.reply(`🗑️ Your clan **${ownedClan}** has been permanently deleted.`);
+        return message.reply(`🗑️ Your clan **${ownedClan}** has been deleted.`);
     }
 
     if (command === 'clandelete') {
         if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
-            return message.reply('❌ Only server administrators can use `!clandelete`!');
+            return message.reply('❌ Only administrators can use `!clandelete`!');
         }
         const clanName = args.join(' ');
         if (!clans[clanName]) return message.reply('Clan does not exist!');
 
         delete clans[clanName];
         saveData();
-        return message.reply(`🗑️ Clan **${clanName}** has been deleted by Administrator.`);
+        return message.reply(`🗑️ Clan **${clanName}** deleted by Administrator.`);
     }
 
     // ==========================================
@@ -606,28 +706,32 @@ client.on('messageCreate', async (message) => {
     }
 
     // ==========================================
-    // 📜 COMPLETE MASTER HELP MENU
+    // 📜 FULL HELP MENU
     // ==========================================
     if (command === 'help') {
         const helpEmbed = new EmbedBuilder()
-            .setTitle('📜 Sxunya Core Complete Command List')
+            .setTitle('📜 Sxunya Core Master Help Menu')
             .setColor('#5865F2')
             .addFields(
                 { 
-                    name: '🎮 General & Fun', 
-                    value: '`!ping` - Latency check\n`!hug <@user>` - Hug someone\n`!slap <@user>` - Slap someone\n`!pat <@user>` - Pat someone\n`!kiss <@user>` - Kiss someone\n`!poke <@user>` - Poke someone\n`!cuddle <@user>` - Cuddle someone' 
+                    name: '🛡️ Moderation Commands (Staff Allowed)', 
+                    value: '`!kick <@user> [reason]` - Kick a member\n`!ban <@user> [reason]` - Ban a member\n`!unban <userID>` - Unban a member by User ID\n`!timeout <@user> <mins> [reason]` - Timeout a member\n`!removetimeout <@user>` - Remove a active timeout' 
                 },
                 { 
-                    name: '💰 Economy & Games', 
-                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - Check coin wallet\n`!givemoney <@user> <amount>` - Transfer coins to a user\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
+                    name: '🎮 General & Fun Actions', 
+                    value: '`!ping` - Check latency\n`!hug <@user>` - Hug someone\n`!slap <@user>` - Slap someone\n`!pat <@user>` - Pat someone\n`!kiss <@user>` - Kiss someone\n`!poke <@user>` - Poke someone\n`!cuddle <@user>` - Cuddle someone' 
+                },
+                { 
+                    name: '💰 Economy & Profile', 
+                    value: '`!daily` - Claim 250 daily coins\n`!balance` or `!bal` - View wallet balance\n`!givemoney <@user> <amount>` - Send coins to a member\n`!coinflip <heads/tails> <amount>` - Gamble coins\n`!profile [@user]` - View complete user profile' 
                 },
                 { 
                     name: '🛡️ Clan System', 
-                    value: '`!createclan <name>` - Create a clan\n`!joinclan <name>` - Join a clan\n`!leaveclan` - Leave current clan\n`!deleteclan` - Delete your clan (Clan Owner Only)\n`!claninfo [name]` - View clan details\n`!clanbank` - View clan bank\n`!deposit <amount>` - Deposit coins into clan bank' 
+                    value: '`!createclan <name>` - Create a new clan\n`!joinclan <name>` - Join an existing clan\n`!leaveclan` - Leave current clan\n`!deleteclan` - Delete owned clan\n`!claninfo [name]` - Check clan details\n`!clanbank` - View clan balance\n`!deposit <amount>` - Deposit coins into clan bank' 
                 },
                 { 
                     name: '⚙️ Utilities & Admin Commands', 
-                    value: '`!serverinfo` - Display server information\n`!setup-ticket` - Create a ticket panel (Admin Only)\n`!poll <question>` - Create a poll (Admin)\n`!enableautoroles` - Enable member auto-role (Admin)\n`!disableautoroles` - Disable member auto-role (Admin)\n`!clandelete <name>` - Delete any clan (Admin Override)' 
+                    value: '`!serverinfo` - Display server information\n`!setup-ticket` - Create a ticket panel\n`!poll <question>` - Create a 👍/👎 poll\n`!enableautoroles` - Enable member auto-role\n`!disableautoroles` - Disable member auto-role\n`!clandelete <name>` - Admin clan deletion override' 
                 }
             )
             .setFooter({ text: 'Use ! prefix before every command.' });
